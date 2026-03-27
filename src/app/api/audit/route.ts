@@ -5,6 +5,9 @@ import { runGeoCheck } from "@/lib/geo-check";
 import { generateReportEmail } from "@/lib/email-generator";
 import { sendEmail } from "@/lib/gmail";
 
+// Vercel function config - 60 seconds max on free tier
+export const maxDuration = 60;
+
 // Validate email format
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -89,62 +92,54 @@ export async function POST(request: NextRequest) {
       geo_score: 0,
     });
 
-    // Return success immediately - process async in background
-    // Using waitUntil pattern for Vercel edge functions
-    const backgroundProcess = async () => {
-      try {
-        // Run GEO check using the service they specified
-        const geoResult = await runGeoCheck(businessName, service, city);
+    // Run GEO check using the service they specified (calls Claude + OpenAI)
+    const geoResult = await runGeoCheck(businessName, service, city);
 
-        // Update lead with results
-        await updateAuditLead(lead.id, {
-          in_claude: geoResult.inClaude,
-          in_chatgpt: geoResult.inChatGPT,
-          competitors: geoResult.competitors,
-          geo_score: geoResult.geoScore,
-        });
+    // Update lead with results
+    await updateAuditLead(lead.id, {
+      in_claude: geoResult.inClaude,
+      in_chatgpt: geoResult.inChatGPT,
+      competitors: geoResult.competitors,
+      geo_score: geoResult.geoScore,
+    });
 
-        // Generate email report
-        const emailHtml = await generateReportEmail({
-          businessName: businessName.trim(),
-          service: service.trim(),
-          city: city.trim(),
-          geoScore: geoResult.geoScore,
-          inClaude: geoResult.inClaude,
-          inChatGPT: geoResult.inChatGPT,
-          competitors: geoResult.competitors,
-        });
+    // Generate email report
+    const emailHtml = await generateReportEmail({
+      businessName: businessName.trim(),
+      service: service.trim(),
+      city: city.trim(),
+      geoScore: geoResult.geoScore,
+      inClaude: geoResult.inClaude,
+      inChatGPT: geoResult.inChatGPT,
+      competitors: geoResult.competitors,
+    });
 
-        // Send email
-        const emailSent = await sendEmail({
-          to: email.trim().toLowerCase(),
-          subject: `Your GEO Audit Report: ${businessName}`,
-          html: emailHtml,
-        });
+    // Send email
+    const emailSent = await sendEmail({
+      to: email.trim().toLowerCase(),
+      subject: `Your GEO Audit Report: ${businessName}`,
+      html: emailHtml,
+    });
 
-        // Update report_sent status
-        await updateAuditLead(lead.id, {
-          report_sent: emailSent,
-        });
+    // Update report_sent status
+    await updateAuditLead(lead.id, {
+      report_sent: emailSent,
+    });
 
-        console.log(
-          `Audit completed for ${businessName} in ${city}. Score: ${geoResult.geoScore}. Email sent: ${emailSent}`
-        );
-      } catch (error) {
-        console.error("Background processing error:", error);
-      }
-    };
-
-    // Start background processing without awaiting
-    // In Vercel, this will continue running after the response is sent
-    backgroundProcess();
+    console.log(
+      `Audit completed for ${businessName} in ${city}. Score: ${geoResult.geoScore}. Email sent: ${emailSent}`
+    );
 
     return NextResponse.json(
       {
         success: true,
-        message:
-          "Your GEO audit is being processed. Check your inbox within 5 minutes.",
+        message: emailSent
+          ? "Your GEO audit report has been sent to your email!"
+          : "Audit completed but email could not be sent. Please try again.",
         leadId: lead.id,
+        geoScore: geoResult.geoScore,
+        inClaude: geoResult.inClaude,
+        inChatGPT: geoResult.inChatGPT,
       },
       {
         status: 200,
