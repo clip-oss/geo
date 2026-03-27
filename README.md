@@ -1,36 +1,137 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# GEO Audit Landing Page
+
+A lead generation landing page that checks if local businesses appear in AI recommendations (ChatGPT and Claude). Business owners enter their details and receive an email report showing their "GEO Visibility Score."
+
+## Features
+
+- **Landing Page**: Professional, conversion-focused design targeting law firms, med spas, and service businesses
+- **GEO Audit API**: Checks if a business appears in Claude and ChatGPT recommendations
+- **Email Reports**: Automated HTML email reports with visibility scores and competitor analysis
+- **Lead Storage**: Supabase integration for storing audit leads
+- **Rate Limiting**: IP-based rate limiting (10 audits per hour)
+
+## Tech Stack
+
+- **Frontend**: Next.js 16, React, Tailwind CSS
+- **Backend**: Next.js API Routes
+- **Database**: Supabase (PostgreSQL)
+- **AI APIs**: Anthropic Claude, OpenAI ChatGPT
+- **Email**: Gmail API (optional)
+- **Icons**: Lucide React
 
 ## Getting Started
 
-First, run the development server:
+### 1. Clone and Install
+
+```bash
+cd geo-audit
+npm install
+```
+
+### 2. Set Up Environment Variables
+
+Copy `.env.example` to `.env.local` and fill in your API keys:
+
+```bash
+cp .env.example .env.local
+```
+
+Required environment variables:
+- `ANTHROPIC_API_KEY` - Your Anthropic API key
+- `OPENAI_API_KEY` - Your OpenAI API key
+- `SUPABASE_URL` - Your Supabase project URL
+- `SUPABASE_KEY` - Your Supabase anon key
+- `GMAIL_ACCESS_TOKEN` (optional) - Gmail API access token for sending emails
+- `NEXT_PUBLIC_CALENDLY_URL` - Your Calendly booking link
+
+### 3. Set Up Supabase
+
+Run the SQL in `supabase-schema.sql` in your Supabase SQL Editor to create the `audit_leads` table.
+
+### 4. Run Development Server
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) to see the landing page.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Project Structure
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```
+src/
+├── app/
+│   ├── api/
+│   │   └── audit/
+│   │       └── route.ts      # POST /api/audit endpoint
+│   ├── globals.css           # Tailwind CSS + custom theme
+│   ├── layout.tsx            # Root layout with fonts
+│   └── page.tsx              # Landing page
+└── lib/
+    ├── email-generator.ts    # HTML email generation with humanizer
+    ├── geo-check.ts          # Claude + ChatGPT API calls
+    ├── gmail.ts              # Gmail API integration
+    ├── rate-limit.ts         # IP-based rate limiting
+    └── supabase.ts           # Supabase client + types
+```
 
-## Learn More
+## API Endpoint
 
-To learn more about Next.js, take a look at the following resources:
+### POST /api/audit
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Request body:
+```json
+{
+  "businessName": "Acme Law Firm",
+  "city": "Los Angeles",
+  "email": "owner@acmelawfirm.com"
+}
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Response (200):
+```json
+{
+  "success": true,
+  "message": "Your GEO audit is being processed. Check your inbox within 5 minutes.",
+  "leadId": "uuid-here"
+}
+```
 
-## Deploy on Vercel
+The API:
+1. Validates input and checks rate limits
+2. Creates a lead record in Supabase
+3. Returns success immediately (async processing)
+4. In background: runs GEO check, generates email, sends report
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Deployment
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Vercel
+
+1. Push to GitHub
+2. Import project in Vercel
+3. Add environment variables
+4. Deploy
+
+The project is optimized for Vercel's serverless functions.
+
+## Customization
+
+### Change Agency Name
+
+Search for "GEO Agency" in `src/app/page.tsx` and replace with your agency name.
+
+### Update Calendly Link
+
+Set `NEXT_PUBLIC_CALENDLY_URL` in your environment variables.
+
+### Modify Email Template
+
+Edit `src/lib/email-generator.ts` to customize the email report design.
+
+### Adjust Rate Limits
+
+Edit `src/lib/rate-limit.ts` to change the rate limit (default: 10 per hour per IP).
+
+## License
+
+Private - All rights reserved.
