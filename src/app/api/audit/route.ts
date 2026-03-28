@@ -104,31 +104,43 @@ export async function POST(request: NextRequest) {
       geo_score: geoResult.geoScore,
     });
 
-    // Generate email report
-    const emailHtml = await generateReportEmail({
-      businessName: businessName.trim(),
-      businessType: businessType.trim(),
-      city: city?.trim() || null,
-      geoScore: geoResult.geoScore,
-      inClaude: geoResult.inClaude,
-      inChatGPT: geoResult.inChatGPT,
-      competitors: geoResult.competitors,
-    });
+    // Generate email report (with error handling)
+    let emailHtml = "";
+    let emailSent = false;
 
-    // Send email
-    const emailSent = await sendEmail({
-      to: email.trim().toLowerCase(),
-      subject: `Your GEO Audit Report: ${businessName}`,
-      html: emailHtml,
-    });
+    try {
+      emailHtml = await generateReportEmail({
+        businessName: businessName.trim(),
+        businessType: businessType.trim(),
+        city: city?.trim() || null,
+        geoScore: geoResult.geoScore,
+        inClaude: geoResult.inClaude,
+        inChatGPT: geoResult.inChatGPT,
+        competitors: geoResult.competitors,
+      });
 
-    // Update report_sent status
-    await updateAuditLead(lead.id, {
-      report_sent: emailSent,
-    });
+      // Send email
+      emailSent = await sendEmail({
+        to: email.trim().toLowerCase(),
+        subject: `Your GEO Audit Report: ${businessName}`,
+        html: emailHtml,
+      });
+    } catch (emailError) {
+      console.error("[GEO Audit] Email generation/sending error:", emailError);
+      // Continue - still return results to user even if email fails
+    }
+
+    // Update report_sent status (don't crash if this fails)
+    try {
+      await updateAuditLead(lead.id, {
+        report_sent: emailSent,
+      });
+    } catch (updateError) {
+      console.error("[GEO Audit] Failed to update lead status:", updateError);
+    }
 
     console.log(
-      `Audit completed for ${businessName} in ${city}. Score: ${geoResult.geoScore}. Email sent: ${emailSent}`
+      `[GEO Audit] Audit completed for ${businessName}${city ? ` in ${city}` : ''}. Score: ${geoResult.geoScore}. Email sent: ${emailSent}`
     );
 
     return NextResponse.json(

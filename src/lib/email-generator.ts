@@ -106,27 +106,16 @@ export async function generateReportEmail(data: EmailData): Promise<string> {
       : "No direct competitors were named.";
 
   const locationContext = data.city ? ` in ${data.city}` : '';
-  const queryDescription = data.city
-    ? `"What are the best ${data.businessType} in ${data.city}?"`
-    : `"What are the best ${data.businessType}?"`;
+  const competitorList = data.competitors.length > 0
+    ? data.competitors.slice(0, 5).join(", ")
+    : "none specifically named";
 
-  const prompt = `Write a brief, professional email report for a business owner about their AI visibility.
+  const prompt = `Write a 3-sentence analysis for a business owner. Their business "${data.businessName}" (${data.businessType}${locationContext}) was checked for AI visibility.
 
-Business: ${data.businessName}
-Business Type: ${data.businessType}
-${data.city ? `City: ${data.city}` : 'Location: Online/National'}
-GEO Score: ${data.geoScore}/100
-Appears in Claude: ${data.inClaude ? "Yes" : "No"}
-Appears in ChatGPT: ${data.inChatGPT ? "Yes" : "No"}
-Competitors that appear: ${data.competitors.join(", ") || "None found"}
+Results: Found in ChatGPT: ${data.inChatGPT ? "yes" : "no"}. Found in Claude: ${data.inClaude ? "yes" : "no"}.
+Competitors that AI recommends instead: ${competitorList}.
 
-We asked AI: ${queryDescription}
-
-Write 2-3 sentences explaining what this means for their business in plain, direct language. Be specific about the implications. Don't use marketing fluff. Write like a consultant who respects their time.
-
-IMPORTANT: Do NOT use any of these banned words or phrases: ${BANNED_WORDS.slice(0, 20).join(", ")}...
-
-Return ONLY the 2-3 sentence analysis, nothing else.`;
+Rules: Be direct and specific. Name the competitors. Explain what this means for their business in practical terms. No AI buzzwords (crucial, landscape, leverage, innovative). Use contractions. Short sentences. Sound like a person, not a marketing brochure. No exclamation marks. 3 sentences max.`;
 
   const response = await anthropic.messages.create({
     model: "claude-sonnet-4-20250514",
@@ -215,7 +204,7 @@ Return ONLY the 2-3 sentence analysis, nothing else.`;
                         </td>
                         <td>
                           <span style="font-size: 16px; font-weight: 500; color: #1e293b;">Claude</span>
-                          <span style="display: block; font-size: 11px; color: #94a3b8;">(training data only)</span>
+                          <span style="display: block; font-size: 11px; color: #94a3b8;">(AI knowledge base)</span>
                           <span style="font-size: 14px; color: ${data.inClaude ? "#22c55e" : "#ef4444"};">${data.inClaude ? "You appear in recommendations" : "Not found in recommendations"}</span>
                         </td>
                       </tr>
@@ -231,7 +220,7 @@ Return ONLY the 2-3 sentence analysis, nothing else.`;
                         </td>
                         <td>
                           <span style="font-size: 16px; font-weight: 500; color: #1e293b;">ChatGPT</span>
-                          <span style="display: block; font-size: 11px; color: #94a3b8;">(with web search)</span>
+                          <span style="display: block; font-size: 11px; color: #94a3b8;">(live web search)</span>
                           <span style="font-size: 14px; color: ${data.inChatGPT ? "#22c55e" : "#ef4444"};">${data.inChatGPT ? "You appear in recommendations" : "Not found in recommendations"}</span>
                         </td>
                       </tr>
@@ -304,21 +293,26 @@ function getVisibilityStatus(inClaude: boolean, inChatGPT: boolean): string {
   if (inClaude && inChatGPT) {
     return "Visible on both platforms";
   }
-  if (inClaude || inChatGPT) {
-    return "Partially visible";
+  if (inChatGPT) {
+    return "Visible in ChatGPT (web search)";
+  }
+  if (inClaude) {
+    return "Visible in Claude only";
   }
   return "Not visible to AI";
 }
 
 function getScoreColor(score: number): string {
-  if (score >= 75) return "#22c55e";
-  if (score >= 50) return "#f97316";
-  return "#ef4444";
+  if (score >= 100) return "#22c55e"; // Both platforms - green
+  if (score >= 50) return "#f97316";  // ChatGPT only - orange
+  if (score >= 30) return "#eab308";  // Claude only - yellow
+  return "#ef4444";                    // Neither - red
 }
 
 function getScoreGradient(score: number): string {
-  if (score >= 75) return "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)";
+  if (score >= 100) return "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)";
   if (score >= 50) return "linear-gradient(135deg, #f97316 0%, #ea580c 100%)";
+  if (score >= 30) return "linear-gradient(135deg, #eab308 0%, #ca8a04 100%)";
   return "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)";
 }
 
