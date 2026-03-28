@@ -199,7 +199,7 @@ export default function Home() {
                             onChange={(e) =>
                               setFormData({ ...formData, businessName: e.target.value })
                             }
-                            placeholder="Smith & Associates Law"
+                            placeholder="e.g. Wolfson & Leon Law Firm"
                             className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 py-3 pl-10 pr-4 text-white placeholder:text-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                             disabled={formState === "submitting"}
                           />
@@ -224,14 +224,11 @@ export default function Home() {
                             onChange={(e) =>
                               setFormData({ ...formData, businessType: e.target.value })
                             }
-                            placeholder="Online casino, Personal injury lawyer, Med spa..."
+                            placeholder="e.g. Personal injury lawyer, Dental clinic, Med spa"
                             className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 py-3 pl-10 pr-4 text-white placeholder:text-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                             disabled={formState === "submitting"}
                           />
                         </div>
-                        <p className="mt-1.5 text-xs text-zinc-500">
-                          We'll ask AI: "What are the best {'{your industry}'}?"
-                        </p>
                       </div>
 
                       {/* City (Optional) */}
@@ -240,7 +237,7 @@ export default function Home() {
                           htmlFor="city"
                           className="mb-2 block text-sm font-medium text-zinc-300"
                         >
-                          City <span className="text-zinc-500">(optional for online businesses)</span>
+                          City (optional)
                         </label>
                         <div className="relative">
                           <MapPin className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
@@ -252,7 +249,7 @@ export default function Home() {
                             onChange={(e) =>
                               setFormData({ ...formData, city: e.target.value })
                             }
-                            placeholder="Miami, FL (leave blank for online/national)"
+                            placeholder="e.g. Miami, FL"
                             className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 py-3 pl-10 pr-4 text-white placeholder:text-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                             disabled={formState === "submitting"}
                           />
