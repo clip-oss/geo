@@ -51,7 +51,7 @@ export async function POST(request: NextRequest) {
 
     // Parse request body
     const body = await request.json();
-    const { businessName, service, city, email } = body;
+    const { businessName, businessType, city, email } = body;
 
     // Validate required fields
     if (!businessName || typeof businessName !== "string") {
@@ -61,15 +61,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!service || typeof service !== "string") {
+    if (!businessType || typeof businessType !== "string") {
       return NextResponse.json(
-        { error: "Service is required" },
+        { error: "Business type/industry is required" },
         { status: 400 }
       );
     }
 
-    if (!city || typeof city !== "string") {
-      return NextResponse.json({ error: "City is required" }, { status: 400 });
+    // City is optional (for online businesses)
+    if (city && typeof city !== "string") {
+      return NextResponse.json({ error: "City must be a string" }, { status: 400 });
     }
 
     if (!email || !isValidEmail(email)) {
@@ -82,8 +83,8 @@ export async function POST(request: NextRequest) {
     // Create initial lead record (with placeholder values)
     const lead = await createAuditLead({
       business_name: businessName.trim(),
-      service: service.trim(),
-      city: city.trim(),
+      business_type: businessType.trim(),
+      city: city?.trim() || null,
       email: email.trim().toLowerCase(),
       report_sent: false,
       in_claude: false,
@@ -92,8 +93,8 @@ export async function POST(request: NextRequest) {
       geo_score: 0,
     });
 
-    // Run GEO check using the service they specified (calls Claude + OpenAI)
-    const geoResult = await runGeoCheck(businessName, service, city);
+    // Run GEO check using the business type (calls Claude + OpenAI)
+    const geoResult = await runGeoCheck(businessName, businessType, city?.trim() || undefined);
 
     // Update lead with results
     await updateAuditLead(lead.id, {
@@ -106,8 +107,8 @@ export async function POST(request: NextRequest) {
     // Generate email report
     const emailHtml = await generateReportEmail({
       businessName: businessName.trim(),
-      service: service.trim(),
-      city: city.trim(),
+      businessType: businessType.trim(),
+      city: city?.trim() || null,
       geoScore: geoResult.geoScore,
       inClaude: geoResult.inClaude,
       inChatGPT: geoResult.inChatGPT,

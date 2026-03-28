@@ -74,8 +74,8 @@ const BANNED_WORDS = [
 
 interface EmailData {
   businessName: string;
-  service: string;
-  city: string;
+  businessType: string;
+  city: string | null;
   geoScore: number;
   inClaude: boolean;
   inChatGPT: boolean;
@@ -105,17 +105,22 @@ export async function generateReportEmail(data: EmailData): Promise<string> {
       ? data.competitors.map((c) => `• ${c}`).join("\n")
       : "No direct competitors were named.";
 
+  const locationContext = data.city ? ` in ${data.city}` : '';
+  const queryDescription = data.city
+    ? `"What are the best ${data.businessType} in ${data.city}?"`
+    : `"What are the best ${data.businessType}?"`;
+
   const prompt = `Write a brief, professional email report for a business owner about their AI visibility.
 
 Business: ${data.businessName}
-Service: ${data.service}
-City: ${data.city}
+Business Type: ${data.businessType}
+${data.city ? `City: ${data.city}` : 'Location: Online/National'}
 GEO Score: ${data.geoScore}/100
 Appears in Claude: ${data.inClaude ? "Yes" : "No"}
 Appears in ChatGPT: ${data.inChatGPT ? "Yes" : "No"}
 Competitors that appear: ${data.competitors.join(", ") || "None found"}
 
-We asked AI: "What are the best ${data.service} providers in ${data.city}?"
+We asked AI: ${queryDescription}
 
 Write 2-3 sentences explaining what this means for their business in plain, direct language. Be specific about the implications. Don't use marketing fluff. Write like a consultant who respects their time.
 
@@ -157,7 +162,7 @@ Return ONLY the 2-3 sentence analysis, nothing else.`;
           <tr>
             <td style="background: linear-gradient(135deg, #1e293b 0%, #334155 100%); padding: 32px 40px; text-align: center;">
               <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 600;">Your GEO Audit Report</h1>
-              <p style="margin: 8px 0 0; color: #94a3b8; font-size: 14px;">${data.businessName} • ${data.service} • ${data.city}</p>
+              <p style="margin: 8px 0 0; color: #94a3b8; font-size: 14px;">${data.businessName} • ${data.businessType}${data.city ? ` • ${data.city}` : ''}</p>
             </td>
           </tr>
 

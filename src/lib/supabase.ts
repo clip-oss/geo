@@ -8,8 +8,8 @@ export const supabase = createClient(supabaseUrl, supabaseKey);
 export interface AuditLead {
   id?: string;
   business_name: string;
-  service: string;
-  city: string;
+  business_type: string;
+  city: string | null;
   email: string;
   created_at?: string;
   report_sent: boolean;

@@ -22,7 +22,7 @@ export default function Home() {
   const [errorMessage, setErrorMessage] = useState("");
   const [formData, setFormData] = useState({
     businessName: "",
-    service: "",
+    businessType: "",
     city: "",
     email: "",
   });
@@ -39,14 +39,11 @@ export default function Home() {
       setErrorMessage("Please enter your business name");
       return;
     }
-    if (!formData.service.trim()) {
-      setErrorMessage("Please enter what service you offer");
+    if (!formData.businessType.trim()) {
+      setErrorMessage("Please enter your business type or industry");
       return;
     }
-    if (!formData.city.trim()) {
-      setErrorMessage("Please enter your city");
-      return;
-    }
+    // City is optional (for online businesses)
     if (!validateEmail(formData.email)) {
       setErrorMessage("Please enter a valid email address");
       return;
@@ -67,7 +64,7 @@ export default function Home() {
       }
 
       setFormState("success");
-      setFormData({ businessName: "", service: "", city: "", email: "" });
+      setFormData({ businessName: "", businessType: "", city: "", email: "" });
     } catch (err) {
       setFormState("error");
       setErrorMessage(
@@ -113,7 +110,7 @@ export default function Home() {
                   </div>
                   <p className="text-zinc-300">
                     <span className="font-medium text-white">We ask the AI directly</span>{" "}
-                    — "Who's the best {"{your service}"} in {"{your city}"}?"
+                    — "What are the best {"{your industry}"}?"
                   </p>
                 </div>
                 <div className="flex items-start gap-3">
@@ -209,41 +206,41 @@ export default function Home() {
                         </div>
                       </div>
 
-                      {/* Service */}
+                      {/* Business Type / Industry */}
                       <div>
                         <label
-                          htmlFor="service"
+                          htmlFor="businessType"
                           className="mb-2 block text-sm font-medium text-zinc-300"
                         >
-                          What service do you offer?
+                          Business Type / Industry
                         </label>
                         <div className="relative">
                           <Briefcase className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
                           <input
                             type="text"
-                            id="service"
-                            name="service"
-                            value={formData.service}
+                            id="businessType"
+                            name="businessType"
+                            value={formData.businessType}
                             onChange={(e) =>
-                              setFormData({ ...formData, service: e.target.value })
+                              setFormData({ ...formData, businessType: e.target.value })
                             }
-                            placeholder="Personal injury lawyer, Botox, Roof repair..."
+                            placeholder="Online casino, Personal injury lawyer, Med spa..."
                             className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 py-3 pl-10 pr-4 text-white placeholder:text-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                             disabled={formState === "submitting"}
                           />
                         </div>
                         <p className="mt-1.5 text-xs text-zinc-500">
-                          This is what we'll ask AI about
+                          We'll ask AI: "What are the best {'{your industry}'}?"
                         </p>
                       </div>
 
-                      {/* City */}
+                      {/* City (Optional) */}
                       <div>
                         <label
                           htmlFor="city"
                           className="mb-2 block text-sm font-medium text-zinc-300"
                         >
-                          City
+                          City <span className="text-zinc-500">(optional for online businesses)</span>
                         </label>
                         <div className="relative">
                           <MapPin className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
@@ -255,7 +252,7 @@ export default function Home() {
                             onChange={(e) =>
                               setFormData({ ...formData, city: e.target.value })
                             }
-                            placeholder="Miami, FL"
+                            placeholder="Miami, FL (leave blank for online/national)"
                             className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 py-3 pl-10 pr-4 text-white placeholder:text-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                             disabled={formState === "submitting"}
                           />
@@ -343,7 +340,7 @@ export default function Home() {
               </div>
               <h3 className="mt-4 font-semibold text-white">We ask ChatGPT</h3>
               <p className="mt-2 text-sm text-zinc-400">
-                "What's the best {"{your service}"} in {"{your city}"}?"
+                "What are the best {"{your industry}"}?"
               </p>
             </div>
             <div className="text-center">
