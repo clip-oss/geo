@@ -79,7 +79,14 @@ async function checkBusinessAppearsWithAI(
     return false;
   }
 
-  const prompt = `Does the following AI response specifically mention or recommend a business called "${businessName}"? Answer YES or NO only.
+  // Normalize the business name for the prompt
+  const normalizedName = businessName.trim();
+
+  const prompt = `Does the following AI response specifically mention or recommend a business called "${normalizedName}"?
+
+IMPORTANT: Match case-insensitively. "${normalizedName.toLowerCase()}" should match "${normalizedName}", "Salvadent Smile" should match "salvadent smile", etc.
+
+Answer YES or NO only.
 
 ---
 ${aiResponse}
@@ -148,25 +155,26 @@ export async function runGeoCheck(
         return "";
       }),
 
-    // ChatGPT check
-    openai.chat.completions
-      .create({
-        model: "gpt-4o",
-        messages: [
-          {
-            role: "user",
-            content: query,
-          },
-        ],
-        max_tokens: 1024,
-      })
-      .then((response) => {
+    // ChatGPT check (with web search enabled for real-time local business data)
+    (async () => {
+      try {
+        const response = await openai.chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            {
+              role: "user",
+              content: query,
+            },
+          ],
+          max_tokens: 1000,
+          web_search_options: {},
+        });
         return response.choices[0]?.message?.content || "";
-      })
-      .catch((error) => {
+      } catch (error) {
         console.error("OpenAI API error:", error);
         return "";
-      }),
+      }
+    })(),
   ]);
 
   // Log full responses for debugging

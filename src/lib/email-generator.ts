@@ -215,7 +215,8 @@ Return ONLY the 2-3 sentence analysis, nothing else.`;
                         </td>
                         <td>
                           <span style="font-size: 16px; font-weight: 500; color: #1e293b;">Claude</span>
-                          <span style="margin-left: 8px; font-size: 14px; color: ${data.inClaude ? "#22c55e" : "#ef4444"};">${data.inClaude ? "You appear in recommendations" : "Not found in recommendations"}</span>
+                          <span style="display: block; font-size: 11px; color: #94a3b8;">(training data only)</span>
+                          <span style="font-size: 14px; color: ${data.inClaude ? "#22c55e" : "#ef4444"};">${data.inClaude ? "You appear in recommendations" : "Not found in recommendations"}</span>
                         </td>
                       </tr>
                     </table>
@@ -230,7 +231,8 @@ Return ONLY the 2-3 sentence analysis, nothing else.`;
                         </td>
                         <td>
                           <span style="font-size: 16px; font-weight: 500; color: #1e293b;">ChatGPT</span>
-                          <span style="margin-left: 8px; font-size: 14px; color: ${data.inChatGPT ? "#22c55e" : "#ef4444"};">${data.inChatGPT ? "You appear in recommendations" : "Not found in recommendations"}</span>
+                          <span style="display: block; font-size: 11px; color: #94a3b8;">(with web search)</span>
+                          <span style="font-size: 14px; color: ${data.inChatGPT ? "#22c55e" : "#ef4444"};">${data.inChatGPT ? "You appear in recommendations" : "Not found in recommendations"}</span>
                         </td>
                       </tr>
                     </table>
