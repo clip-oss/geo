@@ -204,7 +204,7 @@ Rules: Be direct and specific. Name the competitors. Explain what this means for
                         </td>
                         <td>
                           <span style="font-size: 16px; font-weight: 500; color: #1e293b;">Claude</span>
-                          <span style="display: block; font-size: 11px; color: #94a3b8;">(AI knowledge base)</span>
+                          <span style="display: block; font-size: 11px; color: #94a3b8;">(AI knowledge)</span>
                           <span style="font-size: 14px; color: ${data.inClaude ? "#22c55e" : "#ef4444"};">${data.inClaude ? "You appear in recommendations" : "Not found in recommendations"}</span>
                         </td>
                       </tr>
@@ -220,7 +220,7 @@ Rules: Be direct and specific. Name the competitors. Explain what this means for
                         </td>
                         <td>
                           <span style="font-size: 16px; font-weight: 500; color: #1e293b;">ChatGPT</span>
-                          <span style="display: block; font-size: 11px; color: #94a3b8;">(live web search)</span>
+                          <span style="display: block; font-size: 11px; color: #94a3b8;">(live web)</span>
                           <span style="font-size: 14px; color: ${data.inChatGPT ? "#22c55e" : "#ef4444"};">${data.inChatGPT ? "You appear in recommendations" : "Not found in recommendations"}</span>
                         </td>
                       </tr>
@@ -294,7 +294,7 @@ function getVisibilityStatus(inClaude: boolean, inChatGPT: boolean): string {
     return "Visible on both platforms";
   }
   if (inChatGPT) {
-    return "Visible in ChatGPT (web search)";
+    return "Visible in ChatGPT only";
   }
   if (inClaude) {
     return "Visible in Claude only";
@@ -304,15 +304,13 @@ function getVisibilityStatus(inClaude: boolean, inChatGPT: boolean): string {
 
 function getScoreColor(score: number): string {
   if (score >= 100) return "#22c55e"; // Both platforms - green
-  if (score >= 50) return "#f97316";  // ChatGPT only - orange
-  if (score >= 30) return "#eab308";  // Claude only - yellow
+  if (score >= 50) return "#f97316";  // One platform - orange
   return "#ef4444";                    // Neither - red
 }
 
 function getScoreGradient(score: number): string {
   if (score >= 100) return "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)";
   if (score >= 50) return "linear-gradient(135deg, #f97316 0%, #ea580c 100%)";
-  if (score >= 30) return "linear-gradient(135deg, #eab308 0%, #ca8a04 100%)";
   return "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)";
 }
 

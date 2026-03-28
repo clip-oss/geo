@@ -18,111 +18,128 @@ export interface GeoCheckResult {
   geoScore: number;
 }
 
-interface AnalysisResult {
-  found: boolean;
-  competitors: string[];
+// Parse AI response into clean list of business names
+function parseNames(response: string): string[] {
+  return response
+    .split('\n')
+    .map(line =>
+      line
+        .replace(/^[\d]+[\.\)]\s*/, '')  // Remove "1." or "1)"
+        .replace(/^[\-\*\•]\s*/, '')      // Remove bullets
+        .replace(/\*\*/g, '')              // Remove bold markers
+        .trim()
+    )
+    .filter(line => line.length > 1 && line.length < 80)
+    .filter(line => !line.toLowerCase().includes('here are'))
+    .filter(line => !line.toLowerCase().includes('top 10'))
+    .filter(line => !line.toLowerCase().includes('certainly'))
+    .filter(line => !line.toLowerCase().includes('based on'))
+    .filter(line => !line.toLowerCase().includes('i can'))
+    .filter(line => !line.toLowerCase().includes('please note'))
+    .filter(line => !line.toLowerCase().includes('keep in mind'))
+    .filter(line => !line.toLowerCase().startsWith('note:'))
+    .filter(line => !line.toLowerCase().startsWith('disclaimer'));
 }
 
-// Analyze AI response for visibility and competitors using Claude
-async function analyzeResponseWithAI(
-  aiResponse: string,
-  businessName: string,
-  businessType: string,
-  city: string | undefined
-): Promise<AnalysisResult> {
-  if (!aiResponse.trim()) {
-    console.log("[GEO Audit] Empty response, skipping analysis");
-    return { found: false, competitors: [] };
+// Check if business name appears in the list
+function isFound(businessName: string, namesList: string[]): boolean {
+  const biz = businessName.toLowerCase().trim();
+
+  for (const name of namesList) {
+    const n = name.toLowerCase().trim();
+
+    // Exact match
+    if (n === biz) return true;
+
+    // One contains the other
+    if (n.includes(biz) || biz.includes(n)) return true;
+
+    // First word match (for short names like "Stake")
+    const firstWord = biz.split(' ')[0];
+    if (firstWord.length >= 3 && n.includes(firstWord)) return true;
   }
 
-  const locationContext = city ? `${businessType} in ${city}` : businessType;
-  const queryDescription = city
-    ? `What are the best ${businessType} in ${city}?`
-    : `What are the best ${businessType}?`;
+  return false;
+}
 
-  const prompt = `I asked an AI: "${queryDescription}"
+// Query Claude (no web search - AI knowledge base only)
+async function queryClaude(query: string): Promise<string> {
+  try {
+    console.log("[GEO Audit] Querying Claude...");
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1000,
+      messages: [{ role: "user", content: query }],
+    });
+    return response.content[0].type === "text" ? response.content[0].text : "";
+  } catch (error) {
+    console.error("[GEO Audit] Claude API error:", error);
+    return "";
+  }
+}
 
-Here is the AI's full response:
----
-${aiResponse}
----
+// Query ChatGPT with web search
+async function queryChatGPT(query: string): Promise<string> {
+  try {
+    console.log("[GEO Audit] Querying ChatGPT with web search...");
 
-Answer these two questions about the response above:
+    // Try the responses API with web search first
+    try {
+      const response = await (openai as any).responses.create({
+        model: "gpt-4o",
+        tools: [{ type: "web_search_preview" }],
+        input: query,
+      });
+      if (response?.output_text) {
+        return response.output_text;
+      }
+    } catch {
+      console.log("[GEO Audit] Responses API not available, falling back to chat completions...");
+    }
 
-1. Does the response specifically mention or recommend a business called "${businessName}"? Consider partial matches, alternate spellings, and abbreviations. Answer YES or NO.
+    // Fallback to chat completions
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [{ role: "user", content: query }],
+      max_tokens: 1000,
+    });
+    return response.choices[0]?.message?.content || "";
+  } catch (error) {
+    console.error("[GEO Audit] ChatGPT API error:", error);
+    return "";
+  }
+}
 
-2. List ONLY the names of specific businesses, companies, clinics, or firms that are recommended in the response. Return actual business names only. Do NOT include generic advice like "check Google reviews" or "ask locals" or "search online." Do NOT include descriptions, just names.
+// Generate personalized analysis with Claude
+async function generateAnalysis(
+  businessName: string,
+  businessType: string,
+  city: string | undefined,
+  foundInClaude: boolean,
+  foundInChatGPT: boolean,
+  score: number,
+  competitors: string[]
+): Promise<string> {
+  const prompt = `A business called "${businessName}" (${businessType}${city ? ' in ' + city : ''}) was checked for AI visibility.
 
-Return your answer as JSON only, no other text:
-{"found": true/false, "competitors": ["Name 1", "Name 2", "Name 3"]}`;
+Found in ChatGPT: ${foundInChatGPT ? 'Yes' : 'No'}
+Found in Claude: ${foundInClaude ? 'Yes' : 'No'}
+Score: ${score}/100
+Competitors that AI recommends instead: ${competitors.slice(0, 5).join(', ') || 'none found'}
+
+Write exactly 3 sentences explaining what this means for their business. Be direct. Name the competitors. No words like crucial, landscape, leverage, innovative, testament, pivotal. Use contractions. Short sentences. Sound like a person talking, not a brochure.`;
 
   try {
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 500,
+      max_tokens: 300,
       messages: [{ role: "user", content: prompt }],
     });
-
-    const text = response.content[0].type === "text" ? response.content[0].text : "{}";
-    console.log("[GEO Audit] Analysis raw response:", text);
-
-    // Parse JSON from response
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]) as AnalysisResult;
-      return {
-        found: Boolean(parsed.found),
-        competitors: Array.isArray(parsed.competitors) ? parsed.competitors : [],
-      };
-    }
-    return { found: false, competitors: [] };
+    return response.content[0].type === "text" ? response.content[0].text : "";
   } catch (error) {
-    console.error("[GEO Audit] Error analyzing response:", error);
-    return { found: false, competitors: [] };
+    console.error("[GEO Audit] Analysis generation error:", error);
+    return "Unable to generate analysis.";
   }
-}
-
-// Calculate GEO score based on visibility
-// ChatGPT (with web search) = 50 points
-// Claude = 30 points
-// Both = 100 points
-// Neither = 0 points
-function calculateGeoScore(inClaude: boolean, inChatGPT: boolean): number {
-  if (inClaude && inChatGPT) {
-    return 100;
-  }
-  if (inChatGPT) {
-    return 50;
-  }
-  if (inClaude) {
-    return 30;
-  }
-  return 0;
-}
-
-// Deduplicate competitors case-insensitively and remove the audited business
-function dedupeCompetitors(
-  competitors: string[],
-  businessName: string
-): string[] {
-  const seen = new Set<string>();
-  const businessNameLower = businessName.toLowerCase().trim();
-  const result: string[] = [];
-
-  for (const comp of competitors) {
-    const compLower = comp.toLowerCase().trim();
-    // Skip if it's the business being audited or already seen
-    if (compLower.includes(businessNameLower) || businessNameLower.includes(compLower)) {
-      continue;
-    }
-    if (seen.has(compLower)) {
-      continue;
-    }
-    seen.add(compLower);
-    result.push(comp.trim());
-  }
-
-  return result.slice(0, 8); // Limit to 8 competitors
 }
 
 export async function runGeoCheck(
@@ -130,96 +147,63 @@ export async function runGeoCheck(
   businessType: string,
   city?: string
 ): Promise<GeoCheckResult> {
-  // Build query - NEVER include business name, ask about the industry
+  // Build queries - ask for clean list of names
   const query = city
-    ? `What are the best ${businessType} in ${city}? Give me your top 10 recommendations with names.`
-    : `What are the best ${businessType}? Give me your top 10 recommendations with names.`;
+    ? `List the top 10 most popular and well-known ${businessType} in ${city}. Just list their names, nothing else. One per line.`
+    : `List the top 10 most popular and well-known ${businessType}. Just list their names, nothing else. One per line.`;
 
-  console.log("=".repeat(60));
-  console.log("[GEO Audit] STARTING AUDIT");
-  console.log("[GEO Audit] Business:", businessName);
-  console.log("[GEO Audit] Type:", businessType);
-  console.log("[GEO Audit] City:", city || "(none - online business)");
-  console.log("QUERY:", query);
-  console.log("=".repeat(60));
+  console.log("=== AUDIT DEBUG ===");
+  console.log("Business:", businessName, "| Type:", businessType, "| City:", city || "(none)");
+  console.log("Query:", query);
 
-  // Run both AI queries in parallel with individual error handling
+  // Run both AI queries in parallel
   const [claudeResponse, chatGPTResponse] = await Promise.all([
-    // Claude query (no web search - training data only)
-    (async () => {
-      try {
-        console.log("[GEO Audit] Querying Claude...");
-        const response = await anthropic.messages.create({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1500,
-          messages: [{ role: "user", content: query }],
-        });
-        const text = response.content[0].type === "text" ? response.content[0].text : "";
-        console.log("CLAUDE RAW RESPONSE:", text.substring(0, 500) + (text.length > 500 ? "..." : ""));
-        return text;
-      } catch (error) {
-        console.error("[GEO Audit] Claude API error:", error);
-        return "";
-      }
-    })(),
-
-    // ChatGPT query (WITH web search for real-time local data)
-    (async () => {
-      try {
-        console.log("[GEO Audit] Querying ChatGPT with web search...");
-        const response = await openai.chat.completions.create({
-          model: "gpt-4o",
-          messages: [{ role: "user", content: query }],
-          max_tokens: 1500,
-          web_search_options: {},
-        });
-        const text = response.choices[0]?.message?.content || "";
-        console.log("CHATGPT RAW RESPONSE:", text.substring(0, 500) + (text.length > 500 ? "..." : ""));
-        return text;
-      } catch (error) {
-        console.error("[GEO Audit] ChatGPT API error:", error);
-        return "";
-      }
-    })(),
+    queryClaude(query),
+    queryChatGPT(query),
   ]);
 
-  // Analyze both responses in parallel (combined visibility + competitor extraction)
-  console.log("[GEO Audit] Analyzing responses...");
-  const [claudeAnalysis, chatGPTAnalysis] = await Promise.all([
-    analyzeResponseWithAI(claudeResponse, businessName, businessType, city),
-    analyzeResponseWithAI(chatGPTResponse, businessName, businessType, city),
-  ]);
+  console.log("Claude raw response:", claudeResponse);
+  console.log("ChatGPT raw response:", chatGPTResponse);
 
-  console.log("CLAUDE ANALYSIS:", JSON.stringify(claudeAnalysis));
-  console.log("CHATGPT ANALYSIS:", JSON.stringify(chatGPTAnalysis));
+  // Parse responses into name lists
+  const claudeNames = parseNames(claudeResponse);
+  const chatGPTNames = parseNames(chatGPTResponse);
 
-  // Extract results
-  const inClaude = claudeAnalysis.found;
-  const inChatGPT = chatGPTAnalysis.found;
+  console.log("Claude parsed names:", claudeNames);
+  console.log("ChatGPT parsed names:", chatGPTNames);
 
-  // Merge and dedupe competitors from both sources
-  const allCompetitors = dedupeCompetitors(
-    [...claudeAnalysis.competitors, ...chatGPTAnalysis.competitors],
-    businessName
-  );
+  // Check if business is found
+  const foundInClaude = isFound(businessName, claudeNames);
+  const foundInChatGPT = isFound(businessName, chatGPTNames);
 
-  const geoScore = calculateGeoScore(inClaude, inChatGPT);
+  console.log("Found in Claude:", foundInClaude);
+  console.log("Found in ChatGPT:", foundInChatGPT);
 
-  const result = {
-    inClaude,
-    inChatGPT,
+  // Build competitor list (deduplicated, excluding the business itself)
+  const allNames = [...new Set([...claudeNames, ...chatGPTNames].map(n => n.trim()))];
+  const competitors = allNames
+    .filter(name => !isFound(businessName, [name]))
+    .slice(0, 8);
+
+  console.log("Competitors:", competitors);
+
+  // Calculate score
+  let score = 0;
+  if (foundInChatGPT) score += 50;
+  if (foundInClaude) score += 50;
+
+  console.log("Score:", score);
+  console.log("=== END DEBUG ===");
+
+  return {
+    inClaude: foundInClaude,
+    inChatGPT: foundInChatGPT,
     claudeResponse,
     chatGPTResponse,
-    competitors: allCompetitors,
-    geoScore,
+    competitors,
+    geoScore: score,
   };
-
-  console.log("FINAL RESULT:", {
-    found: { claude: inClaude, chatgpt: inChatGPT },
-    competitors: allCompetitors,
-    score: geoScore,
-  });
-  console.log("=".repeat(60));
-
-  return result;
 }
+
+// Export for use in email generation
+export { generateAnalysis };
