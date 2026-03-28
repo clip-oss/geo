@@ -18,117 +18,86 @@ export interface GeoCheckResult {
   geoScore: number;
 }
 
-// Extract business names from AI response
-function extractCompetitors(
-  response: string,
+// Extract competitor business names from AI response using Claude
+async function extractCompetitorsWithAI(
+  aiResponse: string,
+  businessType: string,
+  city: string | undefined,
   businessName: string
-): string[] {
-  const competitors: string[] = [];
-  const businessNameLower = businessName.toLowerCase();
-
-  // Common patterns for business names in AI responses
-  const patterns = [
-    /^\d+\.\s*\*?\*?([^*\n:]+)/gm, // "1. Business Name" or "1. **Business Name**"
-    /[-•]\s*\*?\*?([^*\n:]+)/gm, // "- Business Name" or "• Business Name"
-    /\*\*([^*]+)\*\*/g, // "**Business Name**"
-  ];
-
-  for (const pattern of patterns) {
-    let match;
-    while ((match = pattern.exec(response)) !== null) {
-      const name = match[1]?.trim();
-      if (
-        name &&
-        name.length > 2 &&
-        name.length < 100 &&
-        !name.toLowerCase().includes(businessNameLower) &&
-        !competitors.some((c) => c.toLowerCase() === name.toLowerCase())
-      ) {
-        // Filter out common non-business words
-        const skipWords = [
-          "here",
-          "some",
-          "best",
-          "top",
-          "recommend",
-          "following",
-          "options",
-          "consider",
-          "however",
-          "note",
-          "important",
-          "address",
-          "phone",
-          "website",
-          "rating",
-          "reviews",
-          "services",
-          "hours",
-        ];
-        if (!skipWords.some((w) => name.toLowerCase().startsWith(w))) {
-          competitors.push(name);
-        }
-      }
-    }
+): Promise<string[]> {
+  if (!aiResponse.trim()) {
+    return [];
   }
 
-  // Limit to top 5 competitors
-  return competitors.slice(0, 5);
+  const locationContext = city ? `${businessType} in ${city}` : businessType;
+
+  const prompt = `Here is an AI response about the best ${locationContext}:
+
+---
+${aiResponse}
+---
+
+Extract ONLY the names of specific businesses, clinics, firms, or companies mentioned as recommendations. Return them as a JSON array of strings. Do NOT include generic advice, tips, suggestions, or non-business-name text. If no specific businesses are mentioned, return an empty array.
+
+Example good output: ["Omni Dent", "Sonic Dent", "Elvimed"]
+Example bad output: ["Check Google Reviews", "Ask your hotel"] — never include these
+
+Return ONLY the JSON array, nothing else.`;
+
+  try {
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 500,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const text = response.content[0].type === "text" ? response.content[0].text : "[]";
+
+    // Parse JSON array from response
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (jsonMatch) {
+      const competitors = JSON.parse(jsonMatch[0]) as string[];
+      // Filter out the business being checked
+      const businessNameLower = businessName.toLowerCase();
+      return competitors.filter(
+        (c) => !c.toLowerCase().includes(businessNameLower)
+      );
+    }
+    return [];
+  } catch (error) {
+    console.error("Error extracting competitors with AI:", error);
+    return [];
+  }
 }
 
-// Check if business appears in response
-function businessAppears(response: string, businessName: string): boolean {
-  const responseLower = response.toLowerCase();
-  const businessNameLower = businessName.toLowerCase().trim();
-
-  // Direct substring match
-  if (responseLower.includes(businessNameLower)) {
-    return true;
+// Check if business appears in response using Claude
+async function checkBusinessAppearsWithAI(
+  aiResponse: string,
+  businessName: string
+): Promise<boolean> {
+  if (!aiResponse.trim()) {
+    return false;
   }
 
-  // Word boundary match for short business names (e.g., "Stake")
-  // Use word boundary regex to avoid false positives
-  const escapedName = businessNameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const wordBoundaryRegex = new RegExp(`\\b${escapedName}\\b`, 'i');
-  if (wordBoundaryRegex.test(response)) {
-    return true;
+  const prompt = `Does the following AI response specifically mention or recommend a business called "${businessName}"? Answer YES or NO only.
+
+---
+${aiResponse}
+---`;
+
+  try {
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 10,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const text = response.content[0].type === "text" ? response.content[0].text : "";
+    return text.trim().toUpperCase().startsWith("YES");
+  } catch (error) {
+    console.error("Error checking business appearance with AI:", error);
+    return false;
   }
-
-  // Check for common variations (e.g., "stake.com", "Stake casino")
-  const variations = [
-    `${businessNameLower}.com`,
-    `${businessNameLower}.io`,
-    `${businessNameLower}.net`,
-    `${businessNameLower} casino`,
-    `${businessNameLower} app`,
-    `${businessNameLower} platform`,
-  ];
-  for (const variation of variations) {
-    if (responseLower.includes(variation)) {
-      return true;
-    }
-  }
-
-  // Partial match (at least 2 significant words match) - for multi-word names
-  const businessWords = businessNameLower
-    .split(/\s+/)
-    .filter((w) => w.length > 2); // Reduced from 3 to 2 chars
-
-  // For single-word businesses, the word boundary check above handles it
-  if (businessWords.length === 1) {
-    return false; // Already checked above
-  }
-
-  let matchCount = 0;
-  for (const word of businessWords) {
-    // Use word boundary for each word
-    const wordRegex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
-    if (wordRegex.test(response)) {
-      matchCount++;
-    }
-  }
-
-  return matchCount >= 2;
 }
 
 // Calculate GEO score
@@ -208,18 +177,23 @@ export async function runGeoCheck(
   console.log(chatGPTResult);
   console.log(`[GEO Audit] === END CHATGPT RESPONSE ===`);
 
-  const inClaude = businessAppears(claudeResult, businessName);
-  const inChatGPT = businessAppears(chatGPTResult, businessName);
+  // Use Claude to check visibility and extract competitors (more reliable than regex)
+  console.log(`[GEO Audit] Running AI-based visibility checks and competitor extraction...`);
+
+  const [inClaude, inChatGPT, claudeCompetitors, chatGPTCompetitors] = await Promise.all([
+    checkBusinessAppearsWithAI(claudeResult, businessName),
+    checkBusinessAppearsWithAI(chatGPTResult, businessName),
+    extractCompetitorsWithAI(claudeResult, businessType, city, businessName),
+    extractCompetitorsWithAI(chatGPTResult, businessType, city, businessName),
+  ]);
 
   console.log(`[GEO Audit] Business "${businessName}" found in Claude: ${inClaude}`);
   console.log(`[GEO Audit] Business "${businessName}" found in ChatGPT: ${inChatGPT}`);
+  console.log(`[GEO Audit] Competitors from Claude: ${JSON.stringify(claudeCompetitors)}`);
+  console.log(`[GEO Audit] Competitors from ChatGPT: ${JSON.stringify(chatGPTCompetitors)}`);
 
-  // Extract competitors from both responses
-  const claudeCompetitors = extractCompetitors(claudeResult, businessName);
-  const chatGPTCompetitors = extractCompetitors(chatGPTResult, businessName);
-
-  // Merge and dedupe competitors
-  const allCompetitors = [...new Set([...claudeCompetitors, ...chatGPTCompetitors])];
+  // Merge and dedupe competitors, limit to 5
+  const allCompetitors = [...new Set([...claudeCompetitors, ...chatGPTCompetitors])].slice(0, 5);
 
   const geoScore = calculateGeoScore(inClaude, inChatGPT);
 
