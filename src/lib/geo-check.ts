@@ -18,9 +18,21 @@ export interface GeoCheckResult {
   geoScore: number;
 }
 
+// Junk words that indicate advice/instructions, not business names
+const JUNK_WORDS = [
+  'checking', 'looking', 'consulting', 'asking', 'searching', 'visiting',
+  'browsing', 'reading', 'contacting', 'using', 'consider', 'recommend',
+  'google', 'directory', 'review', 'website', 'online', 'forum', 'facebook',
+  'social media', 'local', 'here are', 'top 10', 'top 15', 'certainly',
+  'based on', 'i would', 'you can', 'you might', 'note that', 'keep in mind',
+  'disclaimer', 'please note', 'important', 'i can', 'however', 'also',
+  'additionally', 'furthermore', 'these are', 'some of', 'popular options'
+];
+
 // Parse AI response into clean list of business names
 function parseNames(response: string): string[] {
-  return response
+  // First pass: basic cleanup
+  const cleaned = response
     .split('\n')
     .map(line =>
       line
@@ -28,17 +40,28 @@ function parseNames(response: string): string[] {
         .replace(/^[\-\*\•]\s*/, '')      // Remove bullets
         .replace(/\*\*/g, '')              // Remove bold markers
         .trim()
-    )
-    .filter(line => line.length > 1 && line.length < 80)
-    .filter(line => !line.toLowerCase().includes('here are'))
-    .filter(line => !line.toLowerCase().includes('top 10'))
-    .filter(line => !line.toLowerCase().includes('certainly'))
-    .filter(line => !line.toLowerCase().includes('based on'))
-    .filter(line => !line.toLowerCase().includes('i can'))
-    .filter(line => !line.toLowerCase().includes('please note'))
-    .filter(line => !line.toLowerCase().includes('keep in mind'))
-    .filter(line => !line.toLowerCase().startsWith('note:'))
-    .filter(line => !line.toLowerCase().startsWith('disclaimer'));
+    );
+
+  // Second pass: strong filtering
+  return cleaned.filter(name => {
+    const lower = name.toLowerCase();
+
+    // Must be reasonable length for a business name
+    if (name.length < 2 || name.length > 60) return false;
+
+    // Must not be a full sentence (too many words)
+    if (name.split(' ').length > 7) return false;
+
+    // Must not start with a verb/gerund (action advice, not a business)
+    if (lower.match(/^(check|look|consult|ask|search|visit|browse|read|contact|use|consider|try|go to|find|see|explore|reach out|call|email|speak|talk|get|make|do|if you|when you|for the|the best|some of|here are|i would|you can|you might|note:|disclaimer)/)) {
+      return false;
+    }
+
+    // Must not contain junk words
+    if (JUNK_WORDS.some(j => lower.includes(j))) return false;
+
+    return true;
+  });
 }
 
 // Check if business name appears in the list
@@ -68,7 +91,8 @@ async function queryClaude(query: string): Promise<string> {
     console.log("[GEO Audit] Querying Claude...");
     const response = await anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
-      max_tokens: 1000,
+      max_tokens: 500,
+      temperature: 0, // Deterministic output for consistent results
       messages: [{ role: "user", content: query }],
     });
     return response.content[0].type === "text" ? response.content[0].text : "";
@@ -81,7 +105,7 @@ async function queryClaude(query: string): Promise<string> {
 // Query ChatGPT with web search
 async function queryChatGPT(query: string): Promise<string> {
   try {
-    console.log("[GEO Audit] Querying ChatGPT with web search...");
+    console.log("[GEO Audit] Querying ChatGPT...");
 
     // Try the responses API with web search first
     try {
@@ -89,6 +113,7 @@ async function queryChatGPT(query: string): Promise<string> {
         model: "gpt-4o",
         tools: [{ type: "web_search_preview" }],
         input: query,
+        temperature: 0,
       });
       if (response?.output_text) {
         return response.output_text;
@@ -101,7 +126,8 @@ async function queryChatGPT(query: string): Promise<string> {
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [{ role: "user", content: query }],
-      max_tokens: 1000,
+      max_tokens: 500,
+      temperature: 0, // Deterministic output for consistent results
     });
     return response.choices[0]?.message?.content || "";
   } catch (error) {
@@ -147,10 +173,10 @@ export async function runGeoCheck(
   businessType: string,
   city?: string
 ): Promise<GeoCheckResult> {
-  // Build queries - ask for clean list of names
+  // Build queries - ask for 15 results with specific instructions for clean output
   const query = city
-    ? `List the top 10 most popular and well-known ${businessType} in ${city}. Just list their names, nothing else. One per line.`
-    : `List the top 10 most popular and well-known ${businessType}. Just list their names, nothing else. One per line.`;
+    ? `Name exactly 15 ${businessType} businesses in ${city}. Only real business names that currently operate there. One name per line. No descriptions, no explanations, no numbering, just the business names.`
+    : `Name exactly 15 well-known ${businessType} companies or brands. Only real names. One name per line. No descriptions, no explanations, no numbering, just the names.`;
 
   console.log("=== AUDIT DEBUG ===");
   console.log("Business:", businessName, "| Type:", businessType, "| City:", city || "(none)");
