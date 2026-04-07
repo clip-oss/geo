@@ -13,6 +13,7 @@ import {
   Sparkles,
   Search,
   CircleAlert,
+  Globe,
 } from "lucide-react";
 
 type FormState = "idle" | "submitting" | "success" | "error";
@@ -24,6 +25,7 @@ export default function Home() {
     businessName: "",
     businessType: "",
     city: "",
+    websiteUrl: "",
     email: "",
   });
 
@@ -64,7 +66,7 @@ export default function Home() {
       }
 
       setFormState("success");
-      setFormData({ businessName: "", businessType: "", city: "", email: "" });
+      setFormData({ businessName: "", businessType: "", city: "", websiteUrl: "", email: "" });
     } catch (err) {
       setFormState("error");
       setErrorMessage(
@@ -128,7 +130,7 @@ export default function Home() {
                   </div>
                   <p className="text-zinc-300">
                     <span className="font-medium text-white">Get your GEO score</span>{" "}
-                    — 0-100 visibility rating across AI platforms
+                    — 0-100 composite score across AI visibility, citability, crawlers &amp; schema
                   </p>
                 </div>
               </div>
@@ -254,6 +256,34 @@ export default function Home() {
                             disabled={formState === "submitting"}
                           />
                         </div>
+                      </div>
+
+                      {/* Website URL (Optional) */}
+                      <div>
+                        <label
+                          htmlFor="websiteUrl"
+                          className="mb-2 block text-sm font-medium text-zinc-300"
+                        >
+                          Website URL (optional)
+                        </label>
+                        <div className="relative">
+                          <Globe className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
+                          <input
+                            type="text"
+                            id="websiteUrl"
+                            name="websiteUrl"
+                            value={formData.websiteUrl}
+                            onChange={(e) =>
+                              setFormData({ ...formData, websiteUrl: e.target.value })
+                            }
+                            placeholder="e.g. https://yourwebsite.com"
+                            className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 py-3 pl-10 pr-4 text-white placeholder:text-zinc-500 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            disabled={formState === "submitting"}
+                          />
+                        </div>
+                        <p className="mt-1 text-xs text-zinc-500">
+                          Add your URL for a deep site analysis (crawlers, schema, citability)
+                        </p>
                       </div>
 
                       {/* Email */}

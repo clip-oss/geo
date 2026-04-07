@@ -17,6 +17,13 @@ export interface AuditLead {
   in_chatgpt: boolean;
   competitors: string[];
   geo_score: number;
+  website_url?: string | null;
+  citability_score?: number | null;
+  crawler_score?: number | null;
+  schema_score?: number | null;
+  content_quality_score?: number | null;
+  composite_geo_score?: number | null;
+  findings?: Record<string, unknown>[] | null;
 }
 
 export async function createAuditLead(lead: Omit<AuditLead, "id" | "created_at">) {

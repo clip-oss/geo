@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { createAuditLead, updateAuditLead } from "@/lib/supabase";
-import { runGeoCheck } from "@/lib/geo-check";
+import { runGeoCheck, calculateCompositeScore } from "@/lib/geo-check";
 import { generateReportEmail } from "@/lib/email-generator";
 import { sendEmail } from "@/lib/gmail";
+import { analyzeSite } from "@/lib/site-analyzer";
 
 // Vercel function config - 60 seconds max on free tier
 export const maxDuration = 60;
@@ -51,7 +52,7 @@ export async function POST(request: NextRequest) {
 
     // Parse request body
     const body = await request.json();
-    const { businessName, businessType, city, email } = body;
+    const { businessName, businessType, city, websiteUrl, email } = body;
 
     // Validate required fields
     if (!businessName || typeof businessName !== "string") {
@@ -73,6 +74,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "City must be a string" }, { status: 400 });
     }
 
+    // Website URL is optional
+    if (websiteUrl && typeof websiteUrl !== "string") {
+      return NextResponse.json({ error: "Website URL must be a string" }, { status: 400 });
+    }
+
     if (!email || !isValidEmail(email)) {
       return NextResponse.json(
         { error: "Valid email is required" },
@@ -80,12 +86,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const trimmedWebsiteUrl = websiteUrl?.trim() || null;
+
     // Create initial lead record (with placeholder values)
     const lead = await createAuditLead({
       business_name: businessName.trim(),
       business_type: businessType.trim(),
       city: city?.trim() || null,
       email: email.trim().toLowerCase(),
+      website_url: trimmedWebsiteUrl,
       report_sent: false,
       in_claude: false,
       in_chatgpt: false,
@@ -93,15 +102,37 @@ export async function POST(request: NextRequest) {
       geo_score: 0,
     });
 
-    // Run GEO check using the business type (calls Claude + OpenAI)
-    const geoResult = await runGeoCheck(businessName, businessType, city?.trim() || undefined);
+    // Run GEO check AND site analysis in parallel
+    const hasWebsite = !!trimmedWebsiteUrl;
+    const [geoResult, siteAnalysis] = await Promise.all([
+      runGeoCheck(businessName, businessType, city?.trim() || undefined),
+      hasWebsite ? analyzeSite(trimmedWebsiteUrl!) : Promise.resolve(null),
+    ]);
+
+    // Calculate composite score
+    const compositeScore = calculateCompositeScore({
+      aiVisibility: geoResult.aiVisibilityScore,
+      citability: siteAnalysis?.citabilityScore ?? 0,
+      brandAuthority: geoResult.aiVisibilityScore > 0 ? 40 : 15, // Basic brand signal from AI presence
+      contentQuality: siteAnalysis?.contentQualityScore ?? 50,
+      crawlerAccess: siteAnalysis?.crawlerScore ?? (hasWebsite ? 50 : 80),
+      schema: siteAnalysis?.schemaScore ?? 0,
+    });
 
     // Update lead with results
     await updateAuditLead(lead.id, {
       in_claude: geoResult.inClaude,
       in_chatgpt: geoResult.inChatGPT,
       competitors: geoResult.competitors,
-      geo_score: geoResult.geoScore,
+      geo_score: geoResult.aiVisibilityScore,
+      citability_score: siteAnalysis?.citabilityScore ?? null,
+      crawler_score: siteAnalysis?.crawlerScore ?? null,
+      schema_score: siteAnalysis?.schemaScore ?? null,
+      content_quality_score: siteAnalysis?.contentQualityScore ?? null,
+      composite_geo_score: compositeScore.total,
+      findings: siteAnalysis?.findings
+        ? siteAnalysis.findings.map((f) => ({ ...f }))
+        : null,
     });
 
     // Generate email report (with error handling)
@@ -113,16 +144,18 @@ export async function POST(request: NextRequest) {
         businessName: businessName.trim(),
         businessType: businessType.trim(),
         city: city?.trim() || null,
-        geoScore: geoResult.geoScore,
+        websiteUrl: trimmedWebsiteUrl,
+        compositeScore,
         inClaude: geoResult.inClaude,
         inChatGPT: geoResult.inChatGPT,
         competitors: geoResult.competitors,
+        siteAnalysis,
       });
 
       // Send email
       emailSent = await sendEmail({
         to: email.trim().toLowerCase(),
-        subject: `Your GEO Audit Report: ${businessName}`,
+        subject: `Your GEO Audit Report: ${businessName} (Score: ${compositeScore.total}/100)`,
         html: emailHtml,
       });
     } catch (emailError) {
@@ -140,7 +173,7 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(
-      `[GEO Audit] Audit completed for ${businessName}${city ? ` in ${city}` : ''}. Score: ${geoResult.geoScore}. Email sent: ${emailSent}`
+      `[GEO Audit] Audit completed for ${businessName}${city ? ` in ${city}` : ""}. Composite: ${compositeScore.total}. Email sent: ${emailSent}`
     );
 
     return NextResponse.json(
@@ -150,7 +183,7 @@ export async function POST(request: NextRequest) {
           ? "Your GEO audit report has been sent to your email!"
           : "Audit completed but email could not be sent. Please try again.",
         leadId: lead.id,
-        geoScore: geoResult.geoScore,
+        geoScore: compositeScore.total,
         inClaude: geoResult.inClaude,
         inChatGPT: geoResult.inChatGPT,
       },

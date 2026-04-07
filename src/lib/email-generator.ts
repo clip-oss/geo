@@ -1,335 +1,589 @@
 import Anthropic from "@anthropic-ai/sdk";
+import type { SiteAnalysisResult, CrawlerDetail, Finding } from "./site-analyzer";
+import type { CompositeGeoScore } from "./geo-check";
 
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY!,
 });
 
-// Banned words list - humanizer rules to avoid AI-sounding text
-const BANNED_WORDS = [
-  "delve",
-  "tapestry",
-  "vibrant",
-  "landscape",
-  "realm",
-  "embark",
-  "journey",
-  "crucial",
-  "pivotal",
-  "moreover",
-  "furthermore",
-  "thus",
-  "hence",
-  "therefore",
-  "utilize",
-  "leverage",
-  "synergy",
-  "paradigm",
-  "holistic",
-  "robust",
-  "cutting-edge",
-  "innovative",
-  "transformative",
-  "groundbreaking",
-  "revolutionary",
-  "game-changing",
-  "seamless",
-  "streamline",
-  "optimize",
-  "enhance",
-  "foster",
-  "cultivate",
-  "nurture",
-  "spearhead",
-  "harness",
-  "unlock",
-  "unleash",
-  "empower",
-  "supercharge",
-  "turbocharge",
-  "elevate",
-  "amplify",
-  "bolster",
-  "catalyze",
-  "cornerstone",
-  "underpinned",
-  "underscores",
-  "multifaceted",
-  "ever-evolving",
-  "ever-changing",
-  "nuanced",
-  "intricacies",
-  "complexities",
-  "at the end of the day",
-  "in today's world",
-  "in this day and age",
-  "it goes without saying",
-  "needless to say",
-  "rest assured",
-  "it is worth noting",
-  "it bears mentioning",
-  "that being said",
-  "having said that",
-  "all things considered",
-];
+// Color palette from geo-seo-claude
+const COLORS = {
+  PRIMARY: "#1a1a2e",
+  ACCENT: "#0f3460",
+  HIGHLIGHT: "#e94560",
+  SUCCESS: "#00b894",
+  WARNING: "#fdcb6e",
+  DANGER: "#d63031",
+  INFO: "#0984e3",
+  WHITE: "#ffffff",
+  LIGHT_BG: "#f0f2f5",
+  MUTED: "#8395a7",
+  DARK_TEXT: "#2d3436",
+  BORDER: "#dfe6e9",
+};
 
-interface EmailData {
+export interface EmailData {
   businessName: string;
   businessType: string;
   city: string | null;
-  geoScore: number;
+  websiteUrl: string | null;
+  compositeScore: CompositeGeoScore;
   inClaude: boolean;
   inChatGPT: boolean;
   competitors: string[];
+  siteAnalysis: SiteAnalysisResult | null;
 }
 
-// Remove banned words from text
-function humanizeText(text: string): string {
-  let result = text;
-  for (const word of BANNED_WORDS) {
-    const regex = new RegExp(`\\b${word}\\b`, "gi");
-    result = result.replace(regex, "");
+interface ReportContent {
+  executiveSummary: string;
+  quickWins: string[];
+  mediumTerm: string[];
+  strategic: string[];
+}
+
+function getScoreColor(score: number): string {
+  if (score >= 80) return COLORS.SUCCESS;
+  if (score >= 60) return COLORS.INFO;
+  if (score >= 40) return COLORS.WARNING;
+  return COLORS.DANGER;
+}
+
+function getScoreLabel(score: number): string {
+  if (score >= 85) return "Excellent";
+  if (score >= 70) return "Good";
+  if (score >= 55) return "Moderate";
+  if (score >= 40) return "Below Average";
+  return "Needs Attention";
+}
+
+function getSeverityColor(severity: Finding["severity"]): string {
+  switch (severity) {
+    case "critical": return COLORS.DANGER;
+    case "high": return COLORS.HIGHLIGHT;
+    case "medium": return COLORS.WARNING;
+    case "low": return COLORS.INFO;
   }
-  // Clean up extra spaces
-  result = result.replace(/\s+/g, " ").trim();
-  result = result.replace(/\s+([.,!?])/g, "$1");
-  return result;
 }
 
-export async function generateReportEmail(data: EmailData): Promise<string> {
-  const calendlyUrl =
-    process.env.NEXT_PUBLIC_CALENDLY_URL || "https://calendly.com/your-link";
+function getSeverityLabel(severity: Finding["severity"]): string {
+  switch (severity) {
+    case "critical": return "CRITICAL";
+    case "high": return "HIGH";
+    case "medium": return "MEDIUM";
+    case "low": return "LOW";
+  }
+}
 
-  const statusText = getVisibilityStatus(data.inClaude, data.inChatGPT);
-  const competitorsList =
-    data.competitors.length > 0
-      ? data.competitors.map((c) => `• ${c}`).join("\n")
-      : "No direct competitors were named.";
+function getCrawlerStatusLabel(status: CrawlerDetail["status"]): string {
+  switch (status) {
+    case "ALLOWED": return "Allowed";
+    case "BLOCKED": return "Blocked";
+    case "PARTIALLY_BLOCKED": return "Partial";
+    case "NOT_MENTIONED": return "Allowed";
+    case "NO_ROBOTS_TXT": return "Allowed";
+  }
+}
 
-  const locationContext = data.city ? ` in ${data.city}` : '';
+function getCrawlerStatusColor(status: CrawlerDetail["status"]): string {
+  if (status === "BLOCKED") return COLORS.DANGER;
+  if (status === "PARTIALLY_BLOCKED") return "#e17055";
+  return COLORS.SUCCESS;
+}
+
+function getCrawlerPlatform(name: string): string {
+  const map: Record<string, string> = {
+    "GPTBot": "ChatGPT",
+    "ChatGPT-User": "ChatGPT",
+    "ClaudeBot": "Claude",
+    "anthropic-ai": "Claude",
+    "PerplexityBot": "Perplexity",
+    "Google-Extended": "Gemini",
+    "Bytespider": "TikTok/ByteDance",
+    "cohere-ai": "Cohere",
+  };
+  return map[name] || name;
+}
+
+function getCrawlerRecommendation(name: string, status: CrawlerDetail["status"]): string {
+  if (status === "BLOCKED") return `Unblock to allow ${getCrawlerPlatform(name)} to cite your content`;
+  if (status === "PARTIALLY_BLOCKED") return "Review partial blocks — may limit AI visibility";
+  return "Keep allowed";
+}
+
+// ── Generate full report content with Claude (like the skill does) ─────────
+
+async function generateReportContent(data: EmailData): Promise<ReportContent> {
+  const { compositeScore, siteAnalysis: sa } = data;
+  const locationContext = data.city ? ` in ${data.city}` : "";
   const competitorList = data.competitors.length > 0
     ? data.competitors.slice(0, 5).join(", ")
     : "none specifically named";
 
-  const prompt = `Write a 3-sentence analysis for a business owner. Their business "${data.businessName}" (${data.businessType}${locationContext}) was checked for AI visibility.
+  const findingsSummary = sa?.findings
+    ? sa.findings.map((f) => `[${f.severity.toUpperCase()}] ${f.category}: ${f.message}`).join("\n")
+    : "No site analysis performed — no website URL provided.";
 
-Results: Found in ChatGPT: ${data.inChatGPT ? "yes" : "no"}. Found in Claude: ${data.inClaude ? "yes" : "no"}.
-Competitors that AI recommends instead: ${competitorList}.
+  const crawlerSummary = sa?.crawlerDetails
+    ? sa.crawlerDetails.map((c) => `${c.name} (${getCrawlerPlatform(c.name)}): ${c.status}`).join(", ")
+    : "Not analyzed";
 
-Rules: Be direct and specific. Name the competitors. Explain what this means for their business in practical terms. No AI buzzwords (crucial, landscape, leverage, innovative). Use contractions. Short sentences. Sound like a person, not a marketing brochure. No exclamation marks. 3 sentences max.`;
+  const prompt = `You are a GEO (Generative Engine Optimization) consultant writing a professional audit report for a client. Analyze the data below and produce a structured report.
 
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-4-20250514",
-    max_tokens: 300,
-    messages: [
-      {
-        role: "user",
-        content: prompt,
-      },
-    ],
-  });
+CLIENT: "${data.businessName}" (${data.businessType}${locationContext})
+WEBSITE: ${data.websiteUrl || "Not provided"}
 
-  let analysis =
-    response.content[0].type === "text" ? response.content[0].text : "";
-  analysis = humanizeText(analysis);
+GEO SCORE: ${compositeScore.total}/100 — ${getScoreLabel(compositeScore.total)}
+- AI Citability & Visibility: ${compositeScore.aiVisibility}/100 (weight: 25%)
+  Found in ChatGPT: ${data.inChatGPT ? "YES" : "NO"}
+  Found in Claude: ${data.inClaude ? "YES" : "NO"}
+- Citability Score: ${compositeScore.citability}/100 (weight: 25%)
+- Brand Authority: ${compositeScore.brandAuthority}/100 (weight: 20%)
+- Content Quality: ${compositeScore.contentQuality}/100 (weight: 15%)
+- Crawler Access: ${compositeScore.crawlerAccess}/100 (weight: 10%)
+- Schema / Structured Data: ${compositeScore.schema}/100 (weight: 5%)
 
-  // Build the HTML email
-  const html = `
-<!DOCTYPE html>
+COMPETITORS AI RECOMMENDS INSTEAD: ${competitorList}
+
+CRAWLER ACCESS: ${crawlerSummary}
+
+SCHEMA TYPES FOUND: ${sa?.schemaTypes?.join(", ") || "None detected"}
+HAS llms.txt: ${sa?.hasLlmsTxt ? "Yes" : "No"}
+
+KEY FINDINGS:
+${findingsSummary}
+
+INSTRUCTIONS:
+Reply in EXACTLY this JSON format (no markdown, no code fences, just raw JSON):
+{
+  "executiveSummary": "A 3-4 sentence executive summary. State the GEO score, what tier it places them in, their strongest and weakest areas, and what the business impact is. Be specific — name the competitors, name the blocked crawlers. Write like a consultant talking to a business owner, not a brochure. Use contractions. Short sentences.",
+  "quickWins": ["action 1", "action 2", "action 3", "action 4", "action 5"],
+  "mediumTerm": ["action 1", "action 2", "action 3", "action 4", "action 5"],
+  "strategic": ["action 1", "action 2", "action 3"]
+}
+
+QUICK WINS = things they can do this week, high impact, low effort (e.g., unblock a crawler, add a meta tag, create llms.txt, add author bylines, fix missing schema).
+MEDIUM TERM = things for this month, moderate effort (e.g., restructure content for citability, implement Organization schema, adjust content blocks to 134-167 words, add question-based headings).
+STRATEGIC = things for this quarter, ongoing investment (e.g., build Wikipedia presence, YouTube content strategy, original research program, Reddit community engagement).
+
+Each action item should be specific to THIS business, not generic. Reference their actual scores, their actual missing schema types, their actual blocked crawlers. No banned words: crucial, landscape, leverage, innovative, holistic, robust, cutting-edge, seamless, optimize (use "improve" instead), enhance, foster, cultivate, elevate, amplify, empower, supercharge, unlock, unleash.`;
+
+  try {
+    const response = await anthropic.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 1500,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const text = response.content[0].type === "text" ? response.content[0].text : "";
+    const cleaned = text.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+    const parsed = JSON.parse(cleaned);
+
+    return {
+      executiveSummary: parsed.executiveSummary || "",
+      quickWins: parsed.quickWins || [],
+      mediumTerm: parsed.mediumTerm || [],
+      strategic: parsed.strategic || [],
+    };
+  } catch (error) {
+    console.error("[GEO Audit] Report content generation error:", error);
+    return {
+      executiveSummary: `${data.businessName} scored ${compositeScore.total}/100 on our GEO audit, placing it in the "${getScoreLabel(compositeScore.total)}" tier. ${data.inChatGPT || data.inClaude ? "The business appears in some AI recommendations" : "The business doesn't appear in AI recommendations when customers ask about " + data.businessType}${data.competitors.length > 0 ? ", while competitors like " + data.competitors.slice(0, 3).join(", ") + " do" : ""}. The biggest opportunity is improving ${compositeScore.schema < compositeScore.citability ? "structured data markup" : "content citability"} — this alone could move the score significantly.`,
+      quickWins: [
+        "Add publication dates to all content pages",
+        "Create an llms.txt file to guide AI systems to key content",
+        "Add author bylines with credentials to all pages",
+        ...(sa?.crawlerDetails?.filter((c) => c.status === "BLOCKED").map((c) => `Unblock ${c.name} in robots.txt`) || []),
+      ].slice(0, 5),
+      mediumTerm: [
+        "Implement Organization + LocalBusiness schema markup (JSON-LD)",
+        "Restructure top pages with question-based headings and direct answer blocks",
+        "Adjust content blocks for AI citability (134-167 word self-contained passages)",
+        "Add sameAs properties linking to all platform profiles",
+        "Implement server-side rendering for all public content pages",
+      ],
+      strategic: [
+        "Build Wikipedia/Wikidata entity presence through press coverage",
+        "Develop YouTube content strategy aligned with AI-searched queries",
+        "Establish original research publication program for unique citability",
+      ],
+    };
+  }
+}
+
+// ── HTML building helpers ──────────────────────────────────────────────────
+
+function buildScoreTable(compositeScore: CompositeGeoScore): string {
+  const rows = [
+    { label: "AI Citability & Visibility", score: compositeScore.aiVisibility, weight: "25%" },
+    { label: "Citability", score: compositeScore.citability, weight: "25%" },
+    { label: "Brand Authority Signals", score: compositeScore.brandAuthority, weight: "20%" },
+    { label: "Content Quality & E-E-A-T", score: compositeScore.contentQuality, weight: "15%" },
+    { label: "Crawler Access", score: compositeScore.crawlerAccess, weight: "10%" },
+    { label: "Structured Data", score: compositeScore.schema, weight: "5%" },
+  ];
+
+  const dataRows = rows.map((r) => {
+    const color = getScoreColor(r.score);
+    const weighted = Math.round(r.score * parseFloat(r.weight) / 100);
+    return `<tr>
+      <td style="padding:8px 12px;font-size:13px;color:${COLORS.DARK_TEXT};border-bottom:1px solid ${COLORS.BORDER}">${r.label}</td>
+      <td style="padding:8px 12px;font-size:13px;font-weight:700;color:${color};border-bottom:1px solid ${COLORS.BORDER};text-align:center">${r.score}/100</td>
+      <td style="padding:8px 12px;font-size:13px;color:${COLORS.MUTED};border-bottom:1px solid ${COLORS.BORDER};text-align:center">${r.weight}</td>
+      <td style="padding:8px 12px;font-size:13px;color:${COLORS.DARK_TEXT};border-bottom:1px solid ${COLORS.BORDER};text-align:center">${weighted}</td>
+    </tr>`;
+  }).join("");
+
+  const totalColor = getScoreColor(compositeScore.total);
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border:1px solid ${COLORS.BORDER};border-radius:8px">
+    <tr style="background-color:${COLORS.PRIMARY}">
+      <td style="padding:8px 12px;font-size:11px;font-weight:700;color:${COLORS.WHITE};text-transform:uppercase">Component</td>
+      <td style="padding:8px 12px;font-size:11px;font-weight:700;color:${COLORS.WHITE};text-transform:uppercase;text-align:center">Score</td>
+      <td style="padding:8px 12px;font-size:11px;font-weight:700;color:${COLORS.WHITE};text-transform:uppercase;text-align:center">Weight</td>
+      <td style="padding:8px 12px;font-size:11px;font-weight:700;color:${COLORS.WHITE};text-transform:uppercase;text-align:center">Weighted</td>
+    </tr>
+    ${dataRows}
+    <tr style="background-color:#eef2f7">
+      <td style="padding:10px 12px;font-size:13px;font-weight:700;color:${COLORS.DARK_TEXT}">OVERALL</td>
+      <td style="padding:10px 12px;font-size:14px;font-weight:800;color:${totalColor};text-align:center">${compositeScore.total}/100</td>
+      <td style="padding:10px 12px;font-size:13px;font-weight:700;color:${COLORS.DARK_TEXT};text-align:center">100%</td>
+      <td style="padding:10px 12px;font-size:14px;font-weight:800;color:${totalColor};text-align:center">${compositeScore.total}</td>
+    </tr>
+  </table>`;
+}
+
+function buildProgressBar(label: string, score: number): string {
+  const color = getScoreColor(score);
+  return `<tr><td style="padding:6px 0">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%"><tr>
+      <td style="font-size:12px;color:${COLORS.DARK_TEXT};font-weight:500;padding-bottom:3px">${label}</td>
+      <td style="font-size:12px;color:${color};font-weight:700;text-align:right;padding-bottom:3px">${score}/100</td>
+    </tr></table>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%"><tr>
+      <td style="background-color:#e8ecf0;border-radius:4px;height:8px">
+        <div style="background-color:${color};border-radius:4px;height:8px;width:${Math.max(3, Math.round((score / 100) * 100))}%"></div>
+      </td>
+    </tr></table>
+  </td></tr>`;
+}
+
+function buildCrawlerTable(crawlerDetails: CrawlerDetail[]): string {
+  const rows = crawlerDetails.map((c) => {
+    const statusColor = getCrawlerStatusColor(c.status);
+    const statusBg = c.status === "BLOCKED" ? "#fde8e8" : c.status === "PARTIALLY_BLOCKED" ? "#fef9e7" : "#e6f9f0";
+    return `<tr>
+      <td style="padding:7px 10px;font-size:12px;color:${COLORS.DARK_TEXT};border-bottom:1px solid ${COLORS.BORDER}">${c.name}</td>
+      <td style="padding:7px 10px;font-size:12px;color:${COLORS.MUTED};border-bottom:1px solid ${COLORS.BORDER}">${getCrawlerPlatform(c.name)}</td>
+      <td style="padding:7px 4px;border-bottom:1px solid ${COLORS.BORDER};text-align:center">
+        <span style="display:inline-block;padding:2px 10px;background-color:${statusBg};color:${statusColor};border-radius:3px;font-size:11px;font-weight:700">${getCrawlerStatusLabel(c.status)}</span>
+      </td>
+      <td style="padding:7px 10px;font-size:11px;color:${COLORS.MUTED};border-bottom:1px solid ${COLORS.BORDER}">${getCrawlerRecommendation(c.name, c.status)}</td>
+    </tr>`;
+  }).join("");
+
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border:1px solid ${COLORS.BORDER};border-radius:8px">
+    <tr style="background-color:${COLORS.PRIMARY}">
+      <td style="padding:7px 10px;font-size:10px;font-weight:700;color:${COLORS.WHITE};text-transform:uppercase">Crawler</td>
+      <td style="padding:7px 10px;font-size:10px;font-weight:700;color:${COLORS.WHITE};text-transform:uppercase">Platform</td>
+      <td style="padding:7px 10px;font-size:10px;font-weight:700;color:${COLORS.WHITE};text-transform:uppercase;text-align:center">Status</td>
+      <td style="padding:7px 10px;font-size:10px;font-weight:700;color:${COLORS.WHITE};text-transform:uppercase">Recommendation</td>
+    </tr>
+    ${rows}
+  </table>`;
+}
+
+function buildActionList(items: string[], accentColor: string): string {
+  if (items.length === 0) return "";
+  const rows = items.map((item, i) => `<tr>
+    <td style="padding:8px 12px;border-bottom:1px solid ${COLORS.BORDER}">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+        <td style="width:24px;height:24px;border-radius:12px;background-color:${accentColor};text-align:center;vertical-align:middle;line-height:24px">
+          <span style="color:${COLORS.WHITE};font-size:12px;font-weight:700">${i + 1}</span>
+        </td>
+        <td style="padding-left:10px;font-size:13px;color:${COLORS.DARK_TEXT};line-height:1.5">${item}</td>
+      </tr></table>
+    </td>
+  </tr>`).join("");
+
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;background-color:${COLORS.WHITE};border-radius:8px;border:1px solid ${COLORS.BORDER}">${rows}</table>`;
+}
+
+function buildPlatformRow(name: string, subtitle: string, found: boolean): string {
+  const statusColor = found ? COLORS.SUCCESS : COLORS.DANGER;
+  const statusBg = found ? "#e6f9f0" : "#fde8e8";
+  const statusIcon = found ? "&#10003;" : "&#10005;";
+  const statusText = found ? "Found in recommendations" : "Not found";
+
+  return `<tr><td style="padding:12px 14px;border-bottom:1px solid ${COLORS.BORDER}">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%"><tr>
+      <td style="width:28px;height:28px;border-radius:14px;background-color:${statusBg};text-align:center;vertical-align:middle;line-height:28px">
+        <span style="color:${statusColor};font-size:14px;font-weight:bold">${statusIcon}</span>
+      </td>
+      <td style="padding-left:10px">
+        <span style="font-size:14px;font-weight:600;color:${COLORS.DARK_TEXT}">${name}</span>
+        <span style="display:block;font-size:11px;color:${COLORS.MUTED}">${subtitle}</span>
+      </td>
+      <td style="text-align:right">
+        <span style="font-size:12px;color:${statusColor};font-weight:600">${statusText}</span>
+      </td>
+    </tr></table>
+  </td></tr>`;
+}
+
+function sectionHeader(title: string): string {
+  return `<tr><td style="padding:24px 32px 12px">
+    <h2 style="margin:0;font-size:16px;font-weight:700;color:${COLORS.PRIMARY}">${title}</h2>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin-top:6px"><tr>
+      <td style="border-bottom:2px solid ${COLORS.ACCENT};height:1px;font-size:1px">&nbsp;</td>
+    </tr></table>
+  </td></tr>`;
+}
+
+function sectionSubheader(title: string, subtitle: string): string {
+  return `<tr><td style="padding:16px 32px 6px">
+    <h3 style="margin:0;font-size:14px;font-weight:700;color:${COLORS.ACCENT}">${title}</h3>
+    <p style="margin:2px 0 0;font-size:11px;color:${COLORS.MUTED}">${subtitle}</p>
+  </td></tr>`;
+}
+
+// ── MAIN ──────────────────────────────────────────────────────────────────
+
+export async function generateReportEmail(data: EmailData): Promise<string> {
+  const calendlyUrl = process.env.NEXT_PUBLIC_CALENDLY_URL || "https://calendly.com/your-link";
+  const { compositeScore } = data;
+  const score = compositeScore.total;
+  const scoreColor = getScoreColor(score);
+  const scoreLabel = getScoreLabel(score);
+  const sa = data.siteAnalysis;
+  const today = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+
+  // Generate full report content with Claude (like the skill does)
+  const report = await generateReportContent(data);
+
+  const scoreTable = buildScoreTable(compositeScore);
+  const progressBars = [
+    buildProgressBar("AI Visibility", compositeScore.aiVisibility),
+    buildProgressBar("Citability", compositeScore.citability),
+    buildProgressBar("Brand Authority", compositeScore.brandAuthority),
+    buildProgressBar("Content Quality", compositeScore.contentQuality),
+    buildProgressBar("Crawler Access", compositeScore.crawlerAccess),
+    buildProgressBar("Schema", compositeScore.schema),
+  ].join("");
+
+  const platformRows = [
+    buildPlatformRow("ChatGPT", "Web search + AI knowledge", data.inChatGPT),
+    buildPlatformRow("Claude", "AI knowledge base", data.inClaude),
+  ].join("");
+
+  // Crawler section
+  let crawlerSection = "";
+  if (sa && sa.crawlerDetails.length > 0) {
+    crawlerSection = `
+      ${sectionHeader("AI Crawler Access Status")}
+      <tr><td style="padding:0 32px 8px"><p style="margin:0;font-size:13px;color:${COLORS.MUTED};line-height:1.5">Blocking AI crawlers prevents AI platforms from citing your content.</p></td></tr>
+      <tr><td style="padding:0 32px 24px">${buildCrawlerTable(sa.crawlerDetails)}</td></tr>`;
+  }
+
+  // Competitors
+  let competitorsSection = "";
+  if (data.competitors.length > 0) {
+    const items = data.competitors.slice(0, 8).map((c) =>
+      `<tr><td style="padding:3px 0;font-size:13px;color:${COLORS.DARK_TEXT}">&bull; ${c}</td></tr>`
+    ).join("");
+    competitorsSection = `
+      ${sectionHeader("Competitors AI Recommends Instead")}
+      <tr><td style="padding:0 32px 24px">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;padding:14px;background-color:#fef5f5;border-radius:8px;border-left:4px solid ${COLORS.HIGHLIGHT}">
+          <tr><td><table role="presentation" cellpadding="0" cellspacing="0" border="0">${items}</table></td></tr>
+        </table>
+      </td></tr>`;
+  }
+
+  // Key findings
+  let findingsSection = "";
+  const findings = sa?.findings ?? [];
+  if (findings.length > 0) {
+    const findingRows = findings.slice(0, 8).map((f) => {
+      const sevColor = getSeverityColor(f.severity);
+      const sevLabel = getSeverityLabel(f.severity);
+      return `<tr><td style="padding:8px 12px;border-bottom:1px solid ${COLORS.BORDER}">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%">
+          <tr><td>
+            <span style="display:inline-block;padding:2px 8px;background-color:${sevColor};color:${COLORS.WHITE};border-radius:3px;font-size:10px;font-weight:700;letter-spacing:0.5px">${sevLabel}</span>
+            <span style="display:inline-block;padding:2px 8px;background-color:#eef2f7;color:${COLORS.MUTED};border-radius:3px;font-size:10px;font-weight:600;margin-left:4px">${f.category}</span>
+          </td></tr>
+          <tr><td style="padding-top:5px;font-size:12px;color:${COLORS.DARK_TEXT};line-height:1.5">${f.message}</td></tr>
+        </table>
+      </td></tr>`;
+    }).join("");
+    findingsSection = `
+      ${sectionHeader("Key Findings")}
+      <tr><td style="padding:0 32px 24px">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border:1px solid ${COLORS.BORDER};border-radius:8px">${findingRows}</table>
+      </td></tr>`;
+  }
+
+  // Schema info
+  let schemaSection = "";
+  if (sa) {
+    const schemaStatus = sa.schemaTypes.length > 0 ? `Found: ${sa.schemaTypes.join(", ")}` : "No schema markup detected";
+    const llmsStatus = sa.hasLlmsTxt ? "Found" : "Not found";
+    schemaSection = `<tr><td style="padding:0 32px 24px">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border:1px solid ${COLORS.BORDER};border-radius:8px">
+        <tr>
+          <td style="padding:10px 14px;font-size:12px;font-weight:600;color:${COLORS.DARK_TEXT};border-bottom:1px solid ${COLORS.BORDER}">Schema Markup (JSON-LD)</td>
+          <td style="padding:10px 14px;font-size:12px;color:${sa.schemaTypes.length > 0 ? COLORS.SUCCESS : COLORS.DANGER};border-bottom:1px solid ${COLORS.BORDER}">${schemaStatus}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 14px;font-size:12px;font-weight:600;color:${COLORS.DARK_TEXT}">llms.txt</td>
+          <td style="padding:10px 14px;font-size:12px;color:${sa.hasLlmsTxt ? COLORS.SUCCESS : COLORS.DANGER}">${llmsStatus}</td>
+        </tr>
+      </table>
+    </td></tr>`;
+  }
+
+  return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Your GEO Audit Report</title>
+  <title>GEO Analysis Report — ${data.businessName}</title>
+  <!--[if mso]><noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript><![endif]-->
 </head>
-<body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
-  <table role="presentation" style="width: 100%; border-collapse: collapse;">
-    <tr>
-      <td style="padding: 40px 20px;">
-        <table role="presentation" style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+<body style="margin:0;padding:0;background-color:${COLORS.LIGHT_BG};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;background-color:${COLORS.LIGHT_BG}">
+    <tr><td style="padding:24px 16px">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;margin:0 auto;background-color:${COLORS.WHITE};border-radius:12px;overflow:hidden;border:1px solid ${COLORS.BORDER}">
 
-          <!-- Header -->
-          <tr>
-            <td style="background: linear-gradient(135deg, #1e293b 0%, #334155 100%); padding: 32px 40px; text-align: center;">
-              <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 600;">Your GEO Audit Report</h1>
-              <p style="margin: 8px 0 0; color: #94a3b8; font-size: 14px;">${data.businessName} • ${data.businessType}${data.city ? ` • ${data.city}` : ''}</p>
+        <!-- HEADER -->
+        <tr><td style="background-color:${COLORS.PRIMARY};padding:28px 32px 24px">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%">
+            <tr><td>
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+                <td style="width:32px;height:32px;border-radius:6px;background-color:${COLORS.ACCENT};text-align:center;vertical-align:middle;line-height:32px">
+                  <span style="color:${COLORS.WHITE};font-size:16px;font-weight:700">G</span>
+                </td>
+                <td style="padding-left:8px"><span style="font-size:16px;font-weight:700;color:${COLORS.WHITE}">GEO Agency</span></td>
+              </tr></table>
+            </td></tr>
+            <tr><td style="padding-top:18px">
+              <h1 style="margin:0;font-size:22px;font-weight:700;color:${COLORS.WHITE};line-height:1.3">GEO Analysis Report</h1>
+              <p style="margin:4px 0 0;font-size:13px;color:${COLORS.MUTED}">Generative Engine Optimization Audit for <strong style="color:${COLORS.WHITE}">${data.businessName}</strong></p>
+            </td></tr>
+          </table>
+        </td></tr>
+
+        <!-- KEY DETAILS -->
+        <tr><td style="padding:20px 32px 0">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%">
+            <tr><td style="font-size:12px;font-weight:700;color:${COLORS.ACCENT};padding:6px 0;border-bottom:1px solid ${COLORS.BORDER}">Website</td><td style="font-size:12px;color:${COLORS.DARK_TEXT};padding:6px 0;border-bottom:1px solid ${COLORS.BORDER}">${data.websiteUrl || "Not provided"}</td></tr>
+            <tr><td style="font-size:12px;font-weight:700;color:${COLORS.ACCENT};padding:6px 0;border-bottom:1px solid ${COLORS.BORDER}">Industry</td><td style="font-size:12px;color:${COLORS.DARK_TEXT};padding:6px 0;border-bottom:1px solid ${COLORS.BORDER}">${data.businessType}${data.city ? ` &bull; ${data.city}` : ""}</td></tr>
+            <tr><td style="font-size:12px;font-weight:700;color:${COLORS.ACCENT};padding:6px 0;border-bottom:1px solid ${COLORS.BORDER}">Analysis Date</td><td style="font-size:12px;color:${COLORS.DARK_TEXT};padding:6px 0;border-bottom:1px solid ${COLORS.BORDER}">${today}</td></tr>
+            <tr><td style="font-size:12px;font-weight:700;color:${COLORS.ACCENT};padding:6px 0">GEO Score</td><td style="font-size:12px;font-weight:700;color:${scoreColor};padding:6px 0">${score}/100 — ${scoreLabel}</td></tr>
+          </table>
+        </td></tr>
+
+        <!-- SCORE GAUGE -->
+        <tr><td style="padding:24px 32px 8px;text-align:center">
+          <!--[if mso]>
+          <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" style="height:130px;v-text-anchor:middle;width:130px;" arcsize="50%" fillcolor="${scoreColor}" stroke="false"><w:anchorlock/><center style="color:#ffffff;font-family:sans-serif;font-size:44px;font-weight:bold">${score}</center></v:roundrect>
+          <![endif]-->
+          <!--[if !mso]><!-->
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 auto"><tr>
+            <td style="width:130px;height:130px;border-radius:65px;background-color:${scoreColor}" align="center" valign="middle">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
+                <td style="width:110px;height:110px;border-radius:55px;background-color:${COLORS.WHITE};text-align:center;vertical-align:middle">
+                  <span style="font-size:44px;font-weight:800;color:${scoreColor};line-height:1">${score}</span>
+                  <span style="display:block;font-size:11px;font-weight:600;color:${COLORS.MUTED};margin-top:-2px">/ 100</span>
+                </td>
+              </tr></table>
             </td>
-          </tr>
+          </tr></table>
+          <!--<![endif]-->
+          <p style="margin:10px 0 0;font-size:13px;font-weight:600;color:${scoreColor}">${scoreLabel}</p>
+        </td></tr>
 
-          <!-- Score Section -->
-          <tr>
-            <td style="padding: 40px;">
-              <table role="presentation" style="width: 100%; text-align: center;">
-                <tr>
-                  <td align="center">
-                    <!--[if mso]>
-                    <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" style="height:136px;v-text-anchor:middle;width:136px;" arcsize="50%" fillcolor="${getScoreColor(data.geoScore)}">
-                    <w:anchorlock/>
-                    <center style="color:#ffffff;font-family:sans-serif;font-size:48px;font-weight:bold;">${data.geoScore}</center>
-                    </v:roundrect>
-                    <![endif]-->
-                    <!--[if !mso]><!-->
-                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto;">
-                      <tr>
-                        <td style="width: 136px; height: 136px; border-radius: 68px; background: ${getScoreGradient(data.geoScore)};" align="center" valign="middle">
-                          <table role="presentation" cellpadding="0" cellspacing="0" border="0">
-                            <tr>
-                              <td style="width: 120px; height: 120px; border-radius: 60px; background-color: #ffffff; text-align: center; vertical-align: middle; line-height: 120px;">
-                                <span style="font-size: 48px; font-weight: 700; color: ${getScoreColor(data.geoScore)}; line-height: 120px;">${data.geoScore}</span>
-                              </td>
-                            </tr>
-                          </table>
-                        </td>
-                      </tr>
-                    </table>
-                    <!--<![endif]-->
-                    <p style="margin: 16px 0 0; font-size: 18px; font-weight: 600; color: #1e293b;">AI Visibility Score</p>
-                    <p style="margin: 4px 0 0; font-size: 14px; color: ${getScoreColor(data.geoScore)}; font-weight: 500;">${statusText}</p>
-                  </td>
-                </tr>
-              </table>
+        <!-- EXECUTIVE SUMMARY -->
+        ${sectionHeader("Executive Summary")}
+        <tr><td style="padding:0 32px 24px">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%"><tr>
+            <td style="padding:14px;background-color:#f8f9fb;border-radius:8px;border:1px solid ${COLORS.BORDER}">
+              <p style="margin:0;font-size:13px;color:${COLORS.DARK_TEXT};line-height:1.7">${report.executiveSummary}</p>
             </td>
-          </tr>
+          </tr></table>
+        </td></tr>
 
-          <!-- Platform Results -->
-          <tr>
-            <td style="padding: 0 40px 32px;">
-              <h2 style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px;">AI Platform Results</h2>
-              <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                <tr>
-                  <td style="padding: 16px; background-color: #f8fafc; border-radius: 8px 8px 0 0; border-bottom: 1px solid #e2e8f0;">
-                    <table role="presentation" style="width: 100%;">
-                      <tr>
-                        <td style="width: 40px;">
-                          ${data.inClaude ? getCheckIcon() : getXIcon()}
-                        </td>
-                        <td>
-                          <span style="font-size: 16px; font-weight: 500; color: #1e293b;">Claude</span>
-                          <span style="display: block; font-size: 11px; color: #94a3b8;">(AI knowledge)</span>
-                          <span style="font-size: 14px; color: ${data.inClaude ? "#22c55e" : "#ef4444"};">${data.inClaude ? "You appear in recommendations" : "Not found in recommendations"}</span>
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-                <tr>
-                  <td style="padding: 16px; background-color: #f8fafc; border-radius: 0 0 8px 8px;">
-                    <table role="presentation" style="width: 100%;">
-                      <tr>
-                        <td style="width: 40px;">
-                          ${data.inChatGPT ? getCheckIcon() : getXIcon()}
-                        </td>
-                        <td>
-                          <span style="font-size: 16px; font-weight: 500; color: #1e293b;">ChatGPT</span>
-                          <span style="display: block; font-size: 11px; color: #94a3b8;">(live web)</span>
-                          <span style="font-size: 14px; color: ${data.inChatGPT ? "#22c55e" : "#ef4444"};">${data.inChatGPT ? "You appear in recommendations" : "Not found in recommendations"}</span>
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
+        <!-- SCORE BREAKDOWN TABLE -->
+        ${sectionHeader("GEO Score Breakdown")}
+        <tr><td style="padding:0 32px 16px">${scoreTable}</td></tr>
+        <tr><td style="padding:0 32px 24px">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%">${progressBars}</table>
+        </td></tr>
+
+        <!-- AI PLATFORM READINESS -->
+        ${sectionHeader("AI Platform Readiness")}
+        <tr><td style="padding:0 32px 8px"><p style="margin:0;font-size:13px;color:${COLORS.MUTED};line-height:1.5">Does your business appear when customers ask AI for recommendations?</p></td></tr>
+        <tr><td style="padding:0 32px 24px">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border:1px solid ${COLORS.BORDER};border-radius:8px">${platformRows}</table>
+        </td></tr>
+
+        <!-- AI CRAWLER ACCESS -->
+        ${crawlerSection}
+
+        <!-- STRUCTURED DATA -->
+        ${sa ? sectionHeader("Structured Data & AI Signals") + schemaSection : ""}
+
+        <!-- COMPETITORS -->
+        ${competitorsSection}
+
+        <!-- KEY FINDINGS -->
+        ${findingsSection}
+
+        <!-- PRIORITIZED ACTION PLAN -->
+        ${sectionHeader("Prioritized Action Plan")}
+        ${sectionSubheader("Quick Wins (This Week)", "High impact, low effort — implement immediately")}
+        <tr><td style="padding:0 32px 16px">${buildActionList(report.quickWins, COLORS.SUCCESS)}</td></tr>
+        ${sectionSubheader("Medium-Term Improvements (This Month)", "Significant impact, moderate effort — content and technical changes")}
+        <tr><td style="padding:0 32px 16px">${buildActionList(report.mediumTerm, COLORS.INFO)}</td></tr>
+        ${sectionSubheader("Strategic Initiatives (This Quarter)", "Long-term competitive advantage — ongoing investment")}
+        <tr><td style="padding:0 32px 24px">${buildActionList(report.strategic, COLORS.ACCENT)}</td></tr>
+
+        <!-- METHODOLOGY -->
+        ${sectionHeader("Methodology")}
+        <tr><td style="padding:0 32px 24px">
+          <p style="margin:0;font-size:12px;color:${COLORS.MUTED};line-height:1.6">This GEO audit was conducted on ${today} analyzing ${data.websiteUrl || data.businessName}. The analysis evaluated the ${data.websiteUrl ? "website" : "brand"} across six dimensions: AI Citability &amp; Visibility (25%), Citability (25%), Brand Authority Signals (20%), Content Quality &amp; E-E-A-T (15%), Crawler Access (10%), and Structured Data (5%).</p>
+          <p style="margin:8px 0 0;font-size:12px;color:${COLORS.MUTED};line-height:1.6"><strong>Platforms assessed:</strong> ChatGPT (Web Search), Claude (AI Knowledge Base)${sa ? ", plus automated crawler/schema/citability analysis" : ""}</p>
+          <p style="margin:8px 0 0;font-size:12px;color:${COLORS.MUTED};line-height:1.6"><strong>Standards referenced:</strong> Google Search Quality Rater Guidelines, Schema.org specification, llms.txt emerging standard, Ahrefs brand mention correlation research (Dec 2025)</p>
+        </td></tr>
+
+        <!-- CTA -->
+        <tr><td style="padding:0 32px 28px">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;background-color:${COLORS.ACCENT};border-radius:10px"><tr>
+            <td style="padding:24px 20px;text-align:center">
+              <h3 style="margin:0 0 6px;font-size:18px;font-weight:700;color:${COLORS.WHITE}">Ready to improve your GEO score?</h3>
+              <p style="margin:0 0 16px;font-size:13px;color:rgba(255,255,255,0.8);line-height:1.5">Book a free 15-minute strategy call. We'll walk through your report and show you the fastest path to AI visibility.</p>
+              <!--[if mso]>
+              <v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" xmlns:w="urn:schemas-microsoft-com:office:word" href="${calendlyUrl}" style="height:42px;v-text-anchor:middle;width:180px;" arcsize="18%" fillcolor="${COLORS.HIGHLIGHT}" stroke="false"><w:anchorlock/><center style="color:#ffffff;font-family:sans-serif;font-size:15px;font-weight:bold">Book Free Call</center></v:roundrect>
+              <![endif]-->
+              <!--[if !mso]><!-->
+              <a href="${calendlyUrl}" style="display:inline-block;padding:11px 28px;background-color:${COLORS.HIGHLIGHT};color:${COLORS.WHITE};font-size:15px;font-weight:700;text-decoration:none;border-radius:6px">Book Free Call</a>
+              <!--<![endif]-->
             </td>
-          </tr>
+          </tr></table>
+        </td></tr>
 
-          <!-- Competitors Section -->
-          ${
-            data.competitors.length > 0
-              ? `
-          <tr>
-            <td style="padding: 0 40px 32px;">
-              <h2 style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px;">Competitors That Appear Instead</h2>
-              <div style="padding: 16px; background-color: #fef2f2; border-radius: 8px; border-left: 4px solid #ef4444;">
-                <p style="margin: 0; font-size: 14px; color: #1e293b; line-height: 1.6;">
-                  ${data.competitors.map((c) => `• ${c}`).join("<br>")}
-                </p>
-              </div>
+        <!-- FOOTER -->
+        <tr><td style="padding:16px 32px;background-color:#f8f9fb;border-top:1px solid ${COLORS.BORDER}">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%"><tr>
+            <td style="text-align:center">
+              <p style="margin:0;font-size:11px;color:${COLORS.MUTED}">Generated by GEO Agency &bull; ${today} &bull; Confidential</p>
+              <p style="margin:4px 0 0;font-size:11px;color:${COLORS.MUTED}">Questions? Reply to this email.</p>
             </td>
-          </tr>
-          `
-              : ""
-          }
+          </tr></table>
+        </td></tr>
 
-          <!-- Analysis Section -->
-          <tr>
-            <td style="padding: 0 40px 32px;">
-              <h2 style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px;">What This Means</h2>
-              <div style="padding: 16px; background-color: #f8fafc; border-radius: 8px;">
-                <p style="margin: 0; font-size: 15px; color: #475569; line-height: 1.7;">${analysis}</p>
-              </div>
-            </td>
-          </tr>
-
-          <!-- CTA Section -->
-          <tr>
-            <td style="padding: 0 40px 40px;">
-              <div style="padding: 24px; background: linear-gradient(135deg, #f97316 0%, #ea580c 100%); border-radius: 12px; text-align: center;">
-                <h3 style="margin: 0 0 8px; font-size: 18px; font-weight: 600; color: #ffffff;">Want to fix this?</h3>
-                <p style="margin: 0 0 16px; font-size: 14px; color: rgba(255,255,255,0.9);">Book a free 15-minute strategy call to discuss your options.</p>
-                <a href="${calendlyUrl}" style="display: inline-block; padding: 12px 32px; background-color: #ffffff; color: #ea580c; font-size: 16px; font-weight: 600; text-decoration: none; border-radius: 8px;">Book Free Call</a>
-              </div>
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="padding: 24px 40px; background-color: #f8fafc; border-top: 1px solid #e2e8f0; text-align: center;">
-              <p style="margin: 0; font-size: 12px; color: #94a3b8;">This report was generated by GEO Agency</p>
-              <p style="margin: 8px 0 0; font-size: 12px; color: #94a3b8;">Questions? Reply to this email.</p>
-            </td>
-          </tr>
-
-        </table>
-      </td>
-    </tr>
+      </table>
+    </td></tr>
   </table>
 </body>
-</html>
-`;
-
-  return html;
-}
-
-function getVisibilityStatus(inClaude: boolean, inChatGPT: boolean): string {
-  if (inClaude && inChatGPT) {
-    return "Visible on both platforms";
-  }
-  if (inChatGPT) {
-    return "Visible in ChatGPT only";
-  }
-  if (inClaude) {
-    return "Visible in Claude only";
-  }
-  return "Not visible to AI";
-}
-
-function getScoreColor(score: number): string {
-  if (score >= 100) return "#22c55e"; // Both platforms - green
-  if (score >= 50) return "#f97316";  // One platform - orange
-  return "#ef4444";                    // Neither - red
-}
-
-function getScoreGradient(score: number): string {
-  if (score >= 100) return "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)";
-  if (score >= 50) return "linear-gradient(135deg, #f97316 0%, #ea580c 100%)";
-  return "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)";
-}
-
-function getCheckIcon(): string {
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="display: inline-table;">
-    <tr>
-      <td style="width: 24px; height: 24px; border-radius: 12px; background-color: #dcfce7; text-align: center; vertical-align: middle; line-height: 24px;">
-        <span style="color: #22c55e; font-size: 14px; font-weight: bold;">✓</span>
-      </td>
-    </tr>
-  </table>`;
-}
-
-function getXIcon(): string {
-  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="display: inline-table;">
-    <tr>
-      <td style="width: 24px; height: 24px; border-radius: 12px; background-color: #fee2e2; text-align: center; vertical-align: middle; line-height: 24px;">
-        <span style="color: #ef4444; font-size: 14px; font-weight: bold;">✕</span>
-      </td>
-    </tr>
-  </table>`;
+</html>`;
 }

@@ -16,6 +16,40 @@ export interface GeoCheckResult {
   chatGPTResponse: string;
   competitors: string[];
   geoScore: number;
+  aiVisibilityScore: number;
+}
+
+export interface CompositeGeoScore {
+  total: number; // 0-100
+  aiVisibility: number; // 0-100, weight 25%
+  citability: number; // 0-100, weight 25%
+  brandAuthority: number; // 0-100, weight 20%
+  contentQuality: number; // 0-100, weight 15%
+  crawlerAccess: number; // 0-100, weight 10%
+  schema: number; // 0-100, weight 5%
+}
+
+export function calculateCompositeScore(components: {
+  aiVisibility: number;
+  citability: number;
+  brandAuthority: number;
+  contentQuality: number;
+  crawlerAccess: number;
+  schema: number;
+}): CompositeGeoScore {
+  const total = Math.round(
+    components.aiVisibility * 0.25 +
+    components.citability * 0.25 +
+    components.brandAuthority * 0.20 +
+    components.contentQuality * 0.15 +
+    components.crawlerAccess * 0.10 +
+    components.schema * 0.05
+  );
+
+  return {
+    total,
+    ...components,
+  };
 }
 
 // Junk words that indicate advice/instructions, not business names
@@ -213,12 +247,12 @@ export async function runGeoCheck(
 
   console.log("Competitors:", competitors);
 
-  // Calculate score
-  let score = 0;
-  if (foundInChatGPT) score += 50;
-  if (foundInClaude) score += 50;
+  // Calculate AI visibility score (0-100)
+  let aiVisibilityScore = 0;
+  if (foundInChatGPT) aiVisibilityScore += 50;
+  if (foundInClaude) aiVisibilityScore += 50;
 
-  console.log("Score:", score);
+  console.log("AI Visibility Score:", aiVisibilityScore);
   console.log("=== END DEBUG ===");
 
   return {
@@ -227,7 +261,8 @@ export async function runGeoCheck(
     claudeResponse,
     chatGPTResponse,
     competitors,
-    geoScore: score,
+    geoScore: aiVisibilityScore, // Will be replaced by composite in route.ts
+    aiVisibilityScore,
   };
 }
 
