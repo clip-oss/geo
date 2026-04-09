@@ -46,6 +46,10 @@ export default function Home() {
       return;
     }
     // City is optional (for online businesses)
+    if (!formData.websiteUrl.trim()) {
+      setErrorMessage("Please enter your website URL");
+      return;
+    }
     if (!validateEmail(formData.email)) {
       setErrorMessage("Please enter a valid email address");
       return;
@@ -100,9 +104,8 @@ export default function Home() {
               </h1>
 
               <p className="mt-6 text-lg leading-relaxed text-zinc-400">
-                When someone asks ChatGPT or Claude for a recommendation in your
-                industry, does your business come up? Or are they sending leads
-                straight to your competition?
+                We analyze your website across the four dimensions that determine
+                whether AI systems can find, understand, and recommend your business.
               </p>
 
               <div className="mt-10 space-y-4">
@@ -111,8 +114,8 @@ export default function Home() {
                     <Check className="h-3 w-3 text-emerald-400" />
                   </div>
                   <p className="text-zinc-300">
-                    <span className="font-medium text-white">We ask the AI directly</span>{" "}
-                    — "What are the best {"{your industry}"}?"
+                    <span className="font-medium text-white">AI Citability</span>{" "}
+                    — can AI systems quote and reference your content?
                   </p>
                 </div>
                 <div className="flex items-start gap-3">
@@ -120,8 +123,8 @@ export default function Home() {
                     <Check className="h-3 w-3 text-emerald-400" />
                   </div>
                   <p className="text-zinc-300">
-                    <span className="font-medium text-white">You see if you appear</span>{" "}
-                    — and which competitors do
+                    <span className="font-medium text-white">Crawler Access</span>{" "}
+                    — are AI bots allowed to crawl your site?
                   </p>
                 </div>
                 <div className="flex items-start gap-3">
@@ -129,8 +132,8 @@ export default function Home() {
                     <Check className="h-3 w-3 text-emerald-400" />
                   </div>
                   <p className="text-zinc-300">
-                    <span className="font-medium text-white">Get your GEO score</span>{" "}
-                    — 0-100 composite score across AI visibility, citability, crawlers &amp; schema
+                    <span className="font-medium text-white">Schema &amp; Content Quality</span>{" "}
+                    — structured data and E-E-A-T signals for a 0-100 GEO score
                   </p>
                 </div>
               </div>
@@ -258,13 +261,13 @@ export default function Home() {
                         </div>
                       </div>
 
-                      {/* Website URL (Optional) */}
+                      {/* Website URL */}
                       <div>
                         <label
                           htmlFor="websiteUrl"
                           className="mb-2 block text-sm font-medium text-zinc-300"
                         >
-                          Website URL (optional)
+                          Website URL
                         </label>
                         <div className="relative">
                           <Globe className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
@@ -357,7 +360,7 @@ export default function Home() {
             How the audit works
           </h2>
           <p className="mx-auto mt-3 max-w-xl text-center text-zinc-400">
-            We query the same AI systems your customers are using
+            We analyze your site across the four pillars of AI readiness
           </p>
 
           <div className="mt-14 grid gap-8 md:grid-cols-3">
@@ -365,27 +368,27 @@ export default function Home() {
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500/10 text-blue-400">
                 <span className="text-xl font-bold">1</span>
               </div>
-              <h3 className="mt-4 font-semibold text-white">We ask ChatGPT</h3>
+              <h3 className="mt-4 font-semibold text-white">Deep site scan</h3>
               <p className="mt-2 text-sm text-zinc-400">
-                "What are the best {"{your industry}"}?"
+                We crawl your site for citability, schema, content quality, and AI crawler access
               </p>
             </div>
             <div className="text-center">
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-purple-500/10 text-purple-400">
                 <span className="text-xl font-bold">2</span>
               </div>
-              <h3 className="mt-4 font-semibold text-white">We ask Claude</h3>
+              <h3 className="mt-4 font-semibold text-white">Score &amp; analyze</h3>
               <p className="mt-2 text-sm text-zinc-400">
-                Same question, different AI — to see your full coverage
+                Four weighted dimensions produce your 0-100 GEO composite score
               </p>
             </div>
             <div className="text-center">
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400">
                 <span className="text-xl font-bold">3</span>
               </div>
-              <h3 className="mt-4 font-semibold text-white">You get results</h3>
+              <h3 className="mt-4 font-semibold text-white">Get your report</h3>
               <p className="mt-2 text-sm text-zinc-400">
-                Your GEO score, visibility status, and who AI recommends instead
+                A detailed email report with your scores, findings, and prioritized action plan
               </p>
             </div>
           </div>

@@ -28,11 +28,7 @@ export interface EmailData {
   city: string | null;
   websiteUrl: string | null;
   compositeScore: CompositeGeoScore;
-  inClaude: boolean;
-  inChatGPT: boolean;
-  competitors: string[];
-  hasWikipedia: boolean;
-  siteAnalysis: SiteAnalysisResult | null;
+  siteAnalysis: SiteAnalysisResult;
 }
 
 interface ReportContent {
@@ -111,44 +107,35 @@ function getCrawlerRecommendation(name: string, status: CrawlerDetail["status"])
   return "Keep allowed";
 }
 
-// ── Generate full report content with Claude (like the skill does) ─────────
+// ── Generate report content with Claude from skill results ─────────────
 
 async function generateReportContent(data: EmailData): Promise<ReportContent> {
   const { compositeScore, siteAnalysis: sa } = data;
   const locationContext = data.city ? ` in ${data.city}` : "";
-  const competitorList = data.competitors.length > 0
-    ? data.competitors.slice(0, 5).join(", ")
-    : "none specifically named";
 
-  const findingsSummary = sa?.findings
-    ? sa.findings.map((f) => `[${f.severity.toUpperCase()}] ${f.category}: ${f.message}`).join("\n")
-    : "No site analysis performed — no website URL provided.";
+  const findingsSummary = sa.findings
+    .map((f) => `[${f.severity.toUpperCase()}] ${f.category}: ${f.message}`)
+    .join("\n");
 
-  const crawlerSummary = sa?.crawlerDetails
-    ? sa.crawlerDetails.map((c) => `${c.name} (${getCrawlerPlatform(c.name)}): ${c.status}`).join(", ")
-    : "Not analyzed";
+  const crawlerSummary = sa.crawlerDetails
+    .map((c) => `${c.name} (${getCrawlerPlatform(c.name)}): ${c.status}`)
+    .join(", ");
 
-  const prompt = `You are a GEO (Generative Engine Optimization) consultant writing a professional audit report for a client. Analyze the data below and produce a structured report.
+  const prompt = `You are a GEO (Generative Engine Optimization) consultant writing a professional audit report for a client. Analyze the site analysis data below and produce a structured report.
 
 CLIENT: "${data.businessName}" (${data.businessType}${locationContext})
-WEBSITE: ${data.websiteUrl || "Not provided"}
-WIKIPEDIA ARTICLE EXISTS: ${data.hasWikipedia ? "YES" : "NO"}
+WEBSITE: ${data.websiteUrl}
 
 GEO SCORE: ${compositeScore.total}/100 — ${getScoreLabel(compositeScore.total)}
-- AI Visibility: ${compositeScore.aiVisibility}/100 (weight: 25%)
-  Found in ChatGPT: ${data.inChatGPT ? "YES" : "NO"}
-  Found in Claude: ${data.inClaude ? "YES" : "NO"}
-- Citability Score: ${compositeScore.citability}/100 (weight: 30%)
-- Content Quality: ${compositeScore.contentQuality}/100 (weight: 20%)
-- Crawler Access: ${compositeScore.crawlerAccess}/100 (weight: 15%)
-- Schema / Structured Data: ${compositeScore.schema}/100 (weight: 10%)
-
-COMPETITORS AI RECOMMENDS INSTEAD: ${competitorList}
+- Citability: ${compositeScore.citability}/100 (weight: 40%)
+- Content Quality: ${compositeScore.contentQuality}/100 (weight: 25%)
+- Crawler Access: ${compositeScore.crawlerAccess}/100 (weight: 20%)
+- Schema / Structured Data: ${compositeScore.schema}/100 (weight: 15%)
 
 CRAWLER ACCESS: ${crawlerSummary}
 
-SCHEMA TYPES FOUND: ${sa?.schemaTypes?.join(", ") || "None detected"}
-HAS llms.txt: ${sa?.hasLlmsTxt ? "Yes" : "No"}
+SCHEMA TYPES FOUND: ${sa.schemaTypes.join(", ") || "None detected"}
+HAS llms.txt: ${sa.hasLlmsTxt ? "Yes" : "No"}
 
 KEY FINDINGS:
 ${findingsSummary}
@@ -156,7 +143,7 @@ ${findingsSummary}
 INSTRUCTIONS:
 Reply in EXACTLY this JSON format (no markdown, no code fences, just raw JSON):
 {
-  "executiveSummary": "A 3-4 sentence executive summary. State the GEO score, what tier it places them in, their strongest and weakest areas, and what the business impact is. Be specific — name the competitors, name the blocked crawlers. Write like a consultant talking to a business owner, not a brochure. Use contractions. Short sentences.",
+  "executiveSummary": "A 3-4 sentence executive summary. State the GEO score, what tier it places them in, their strongest and weakest areas, and what the business impact is. Be specific — name the blocked crawlers, missing schema, content issues. Write like a consultant talking to a business owner, not a brochure. Use contractions. Short sentences.",
   "quickWins": ["action 1", "action 2", "action 3", "action 4", "action 5"],
   "mediumTerm": ["action 1", "action 2", "action 3", "action 4", "action 5"],
   "strategic": ["action 1", "action 2", "action 3"]
@@ -166,13 +153,7 @@ QUICK WINS = things they can do this week, high impact, low effort (e.g., unbloc
 MEDIUM TERM = things for this month, moderate effort (e.g., restructure content for citability, implement Organization schema, adjust content blocks to 134-167 words, add question-based headings).
 STRATEGIC = things for this quarter, ongoing investment (e.g., original research program, comprehensive schema implementation, content hub strategy).
 
-Each action item should be specific to THIS business, not generic. Reference their actual scores, their actual missing schema types, their actual blocked crawlers.
-
-CRITICAL RULES FOR RECOMMENDATIONS:
-- Only recommend actions based on data you actually have above.
-- Wikipedia: If WIKIPEDIA ARTICLE EXISTS is YES, do NOT recommend creating a Wikipedia article. Instead you may suggest "ensure Wikipedia article accuracy and completeness" or "verify Wikidata properties are complete." If NO, you may suggest building press coverage to establish notability, but do NOT say "create a Wikipedia article" — Wikipedia articles must be written by independent editors.
-- Do NOT assume the business lacks a YouTube channel, Reddit presence, or any other external platform presence unless the data above explicitly says so.
-- Focus recommendations on: website content, crawler access, schema markup, content structure, citability, and AI visibility improvements.
+Each action item must be specific to THIS business. Reference their actual scores, actual missing schema types, actual blocked crawlers. Only recommend actions based on the data above — do not assume anything about external platform presence (Wikipedia, YouTube, Reddit, etc.).
 
 No banned words: crucial, landscape, leverage, innovative, holistic, robust, cutting-edge, seamless, optimize (use "improve" instead), enhance, foster, cultivate, elevate, amplify, empower, supercharge, unlock, unleash.`;
 
@@ -196,12 +177,12 @@ No banned words: crucial, landscape, leverage, innovative, holistic, robust, cut
   } catch (error) {
     console.error("[GEO Audit] Report content generation error:", error);
     return {
-      executiveSummary: `${data.businessName} scored ${compositeScore.total}/100 on our GEO audit, placing it in the "${getScoreLabel(compositeScore.total)}" tier. ${data.inChatGPT || data.inClaude ? "The business appears in some AI recommendations" : "The business doesn't appear in AI recommendations when customers ask about " + data.businessType}${data.competitors.length > 0 ? ", while competitors like " + data.competitors.slice(0, 3).join(", ") + " do" : ""}. The biggest opportunity is improving ${compositeScore.schema < compositeScore.citability ? "structured data markup" : "content citability"} — this alone could move the score significantly.`,
+      executiveSummary: `${data.businessName} scored ${compositeScore.total}/100 on our GEO audit, placing it in the "${getScoreLabel(compositeScore.total)}" tier. The biggest opportunity is improving ${compositeScore.schema < compositeScore.citability ? "structured data markup" : "content citability"} — this alone could move the score significantly.`,
       quickWins: [
         "Add publication dates to all content pages",
         "Create an llms.txt file to guide AI systems to key content",
         "Add author bylines with credentials to all pages",
-        ...(sa?.crawlerDetails?.filter((c) => c.status === "BLOCKED").map((c) => `Unblock ${c.name} in robots.txt`) || []),
+        ...sa.crawlerDetails.filter((c) => c.status === "BLOCKED").map((c) => `Unblock ${c.name} in robots.txt`),
       ].slice(0, 5),
       mediumTerm: [
         "Implement Organization + LocalBusiness schema markup (JSON-LD)",
@@ -211,9 +192,9 @@ No banned words: crucial, landscape, leverage, innovative, holistic, robust, cut
         "Implement server-side rendering for all public content pages",
       ],
       strategic: [
-        "Build Wikipedia/Wikidata entity presence through press coverage",
-        "Develop YouTube content strategy aligned with AI-searched queries",
+        "Develop comprehensive content hub strategy for AI-searched queries",
         "Establish original research publication program for unique citability",
+        "Build full structured data coverage across all page types",
       ],
     };
   }
@@ -223,11 +204,10 @@ No banned words: crucial, landscape, leverage, innovative, holistic, robust, cut
 
 function buildScoreTable(compositeScore: CompositeGeoScore): string {
   const rows = [
-    { label: "AI Visibility", score: compositeScore.aiVisibility, weight: "25%" },
-    { label: "Citability", score: compositeScore.citability, weight: "30%" },
-    { label: "Content Quality & E-E-A-T", score: compositeScore.contentQuality, weight: "20%" },
-    { label: "Crawler Access", score: compositeScore.crawlerAccess, weight: "15%" },
-    { label: "Structured Data", score: compositeScore.schema, weight: "10%" },
+    { label: "Citability", score: compositeScore.citability, weight: "40%" },
+    { label: "Content Quality & E-E-A-T", score: compositeScore.contentQuality, weight: "25%" },
+    { label: "Crawler Access", score: compositeScore.crawlerAccess, weight: "20%" },
+    { label: "Structured Data", score: compositeScore.schema, weight: "15%" },
   ];
 
   const dataRows = rows.map((r) => {
@@ -315,28 +295,6 @@ function buildActionList(items: string[], accentColor: string): string {
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;background-color:${COLORS.WHITE};border-radius:8px;border:1px solid ${COLORS.BORDER}">${rows}</table>`;
 }
 
-function buildPlatformRow(name: string, subtitle: string, found: boolean): string {
-  const statusColor = found ? COLORS.SUCCESS : COLORS.DANGER;
-  const statusBg = found ? "#e6f9f0" : "#fde8e8";
-  const statusIcon = found ? "&#10003;" : "&#10005;";
-  const statusText = found ? "Found in recommendations" : "Not found";
-
-  return `<tr><td style="padding:12px 14px;border-bottom:1px solid ${COLORS.BORDER}">
-    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%"><tr>
-      <td style="width:28px;height:28px;border-radius:14px;background-color:${statusBg};text-align:center;vertical-align:middle;line-height:28px">
-        <span style="color:${statusColor};font-size:14px;font-weight:bold">${statusIcon}</span>
-      </td>
-      <td style="padding-left:10px">
-        <span style="font-size:14px;font-weight:600;color:${COLORS.DARK_TEXT}">${name}</span>
-        <span style="display:block;font-size:11px;color:${COLORS.MUTED}">${subtitle}</span>
-      </td>
-      <td style="text-align:right">
-        <span style="font-size:12px;color:${statusColor};font-weight:600">${statusText}</span>
-      </td>
-    </tr></table>
-  </td></tr>`;
-}
-
 function sectionHeader(title: string): string {
   return `<tr><td style="padding:24px 32px 12px">
     <h2 style="margin:0;font-size:16px;font-weight:700;color:${COLORS.PRIMARY}">${title}</h2>
@@ -364,52 +322,30 @@ export async function generateReportEmail(data: EmailData): Promise<string> {
   const sa = data.siteAnalysis;
   const today = new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
 
-  // Generate full report content with Claude (like the skill does)
+  // Generate report content from skill results
   const report = await generateReportContent(data);
 
   const scoreTable = buildScoreTable(compositeScore);
   const progressBars = [
-    buildProgressBar("AI Visibility", compositeScore.aiVisibility),
     buildProgressBar("Citability", compositeScore.citability),
     buildProgressBar("Content Quality", compositeScore.contentQuality),
     buildProgressBar("Crawler Access", compositeScore.crawlerAccess),
     buildProgressBar("Schema", compositeScore.schema),
   ].join("");
 
-  const platformRows = [
-    buildPlatformRow("ChatGPT", "Web search + AI knowledge", data.inChatGPT),
-    buildPlatformRow("Claude", "AI knowledge base", data.inClaude),
-  ].join("");
-
   // Crawler section
   let crawlerSection = "";
-  if (sa && sa.crawlerDetails.length > 0) {
+  if (sa.crawlerDetails.length > 0) {
     crawlerSection = `
       ${sectionHeader("AI Crawler Access Status")}
       <tr><td style="padding:0 32px 8px"><p style="margin:0;font-size:13px;color:${COLORS.MUTED};line-height:1.5">Blocking AI crawlers prevents AI platforms from citing your content.</p></td></tr>
       <tr><td style="padding:0 32px 24px">${buildCrawlerTable(sa.crawlerDetails)}</td></tr>`;
   }
 
-  // Competitors
-  let competitorsSection = "";
-  if (data.competitors.length > 0) {
-    const items = data.competitors.slice(0, 8).map((c) =>
-      `<tr><td style="padding:3px 0;font-size:13px;color:${COLORS.DARK_TEXT}">&bull; ${c}</td></tr>`
-    ).join("");
-    competitorsSection = `
-      ${sectionHeader("Competitors AI Recommends Instead")}
-      <tr><td style="padding:0 32px 24px">
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;padding:14px;background-color:#fef5f5;border-radius:8px;border-left:4px solid ${COLORS.HIGHLIGHT}">
-          <tr><td><table role="presentation" cellpadding="0" cellspacing="0" border="0">${items}</table></td></tr>
-        </table>
-      </td></tr>`;
-  }
-
   // Key findings
   let findingsSection = "";
-  const findings = sa?.findings ?? [];
-  if (findings.length > 0) {
-    const findingRows = findings.slice(0, 8).map((f) => {
+  if (sa.findings.length > 0) {
+    const findingRows = sa.findings.slice(0, 8).map((f) => {
       const sevColor = getSeverityColor(f.severity);
       const sevLabel = getSeverityLabel(f.severity);
       return `<tr><td style="padding:8px 12px;border-bottom:1px solid ${COLORS.BORDER}">
@@ -430,23 +366,20 @@ export async function generateReportEmail(data: EmailData): Promise<string> {
   }
 
   // Schema info
-  let schemaSection = "";
-  if (sa) {
-    const schemaStatus = sa.schemaTypes.length > 0 ? `Found: ${sa.schemaTypes.join(", ")}` : "No schema markup detected";
-    const llmsStatus = sa.hasLlmsTxt ? "Found" : "Not found";
-    schemaSection = `<tr><td style="padding:0 32px 24px">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border:1px solid ${COLORS.BORDER};border-radius:8px">
-        <tr>
-          <td style="padding:10px 14px;font-size:12px;font-weight:600;color:${COLORS.DARK_TEXT};border-bottom:1px solid ${COLORS.BORDER}">Schema Markup (JSON-LD)</td>
-          <td style="padding:10px 14px;font-size:12px;color:${sa.schemaTypes.length > 0 ? COLORS.SUCCESS : COLORS.DANGER};border-bottom:1px solid ${COLORS.BORDER}">${schemaStatus}</td>
-        </tr>
-        <tr>
-          <td style="padding:10px 14px;font-size:12px;font-weight:600;color:${COLORS.DARK_TEXT}">llms.txt</td>
-          <td style="padding:10px 14px;font-size:12px;color:${sa.hasLlmsTxt ? COLORS.SUCCESS : COLORS.DANGER}">${llmsStatus}</td>
-        </tr>
-      </table>
-    </td></tr>`;
-  }
+  const schemaStatus = sa.schemaTypes.length > 0 ? `Found: ${sa.schemaTypes.join(", ")}` : "No schema markup detected";
+  const llmsStatus = sa.hasLlmsTxt ? "Found" : "Not found";
+  const schemaSection = `<tr><td style="padding:0 32px 24px">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border:1px solid ${COLORS.BORDER};border-radius:8px">
+      <tr>
+        <td style="padding:10px 14px;font-size:12px;font-weight:600;color:${COLORS.DARK_TEXT};border-bottom:1px solid ${COLORS.BORDER}">Schema Markup (JSON-LD)</td>
+        <td style="padding:10px 14px;font-size:12px;color:${sa.schemaTypes.length > 0 ? COLORS.SUCCESS : COLORS.DANGER};border-bottom:1px solid ${COLORS.BORDER}">${schemaStatus}</td>
+      </tr>
+      <tr>
+        <td style="padding:10px 14px;font-size:12px;font-weight:600;color:${COLORS.DARK_TEXT}">llms.txt</td>
+        <td style="padding:10px 14px;font-size:12px;color:${sa.hasLlmsTxt ? COLORS.SUCCESS : COLORS.DANGER}">${llmsStatus}</td>
+      </tr>
+    </table>
+  </td></tr>`;
 
   return `<!DOCTYPE html>
 <html>
@@ -482,7 +415,7 @@ export async function generateReportEmail(data: EmailData): Promise<string> {
         <!-- KEY DETAILS -->
         <tr><td style="padding:20px 32px 0">
           <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%">
-            <tr><td style="font-size:12px;font-weight:700;color:${COLORS.ACCENT};padding:6px 0;border-bottom:1px solid ${COLORS.BORDER}">Website</td><td style="font-size:12px;color:${COLORS.DARK_TEXT};padding:6px 0;border-bottom:1px solid ${COLORS.BORDER}">${data.websiteUrl || "Not provided"}</td></tr>
+            <tr><td style="font-size:12px;font-weight:700;color:${COLORS.ACCENT};padding:6px 0;border-bottom:1px solid ${COLORS.BORDER}">Website</td><td style="font-size:12px;color:${COLORS.DARK_TEXT};padding:6px 0;border-bottom:1px solid ${COLORS.BORDER}">${data.websiteUrl}</td></tr>
             <tr><td style="font-size:12px;font-weight:700;color:${COLORS.ACCENT};padding:6px 0;border-bottom:1px solid ${COLORS.BORDER}">Industry</td><td style="font-size:12px;color:${COLORS.DARK_TEXT};padding:6px 0;border-bottom:1px solid ${COLORS.BORDER}">${data.businessType}${data.city ? ` &bull; ${data.city}` : ""}</td></tr>
             <tr><td style="font-size:12px;font-weight:700;color:${COLORS.ACCENT};padding:6px 0;border-bottom:1px solid ${COLORS.BORDER}">Analysis Date</td><td style="font-size:12px;color:${COLORS.DARK_TEXT};padding:6px 0;border-bottom:1px solid ${COLORS.BORDER}">${today}</td></tr>
             <tr><td style="font-size:12px;font-weight:700;color:${COLORS.ACCENT};padding:6px 0">GEO Score</td><td style="font-size:12px;font-weight:700;color:${scoreColor};padding:6px 0">${score}/100 — ${scoreLabel}</td></tr>
@@ -526,21 +459,12 @@ export async function generateReportEmail(data: EmailData): Promise<string> {
           <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%">${progressBars}</table>
         </td></tr>
 
-        <!-- AI PLATFORM READINESS -->
-        ${sectionHeader("AI Platform Readiness")}
-        <tr><td style="padding:0 32px 8px"><p style="margin:0;font-size:13px;color:${COLORS.MUTED};line-height:1.5">Does your business appear when customers ask AI for recommendations?</p></td></tr>
-        <tr><td style="padding:0 32px 24px">
-          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;border:1px solid ${COLORS.BORDER};border-radius:8px">${platformRows}</table>
-        </td></tr>
-
         <!-- AI CRAWLER ACCESS -->
         ${crawlerSection}
 
         <!-- STRUCTURED DATA -->
-        ${sa ? sectionHeader("Structured Data & AI Signals") + schemaSection : ""}
-
-        <!-- COMPETITORS -->
-        ${competitorsSection}
+        ${sectionHeader("Structured Data & AI Signals")}
+        ${schemaSection}
 
         <!-- KEY FINDINGS -->
         ${findingsSection}
@@ -557,8 +481,8 @@ export async function generateReportEmail(data: EmailData): Promise<string> {
         <!-- METHODOLOGY -->
         ${sectionHeader("Methodology")}
         <tr><td style="padding:0 32px 24px">
-          <p style="margin:0;font-size:12px;color:${COLORS.MUTED};line-height:1.6">This GEO audit was conducted on ${today} analyzing ${data.websiteUrl || data.businessName}. The analysis evaluated five dimensions: AI Visibility (25%), Citability (30%), Content Quality &amp; E-E-A-T (20%), Crawler Access (15%), and Structured Data (10%).</p>
-          <p style="margin:8px 0 0;font-size:12px;color:${COLORS.MUTED};line-height:1.6"><strong>Platforms assessed:</strong> ChatGPT (Web Search), Claude (AI Knowledge Base)${sa ? ", plus automated crawler/schema/citability analysis" : ""}</p>
+          <p style="margin:0;font-size:12px;color:${COLORS.MUTED};line-height:1.6">This GEO audit was conducted on ${today} analyzing ${data.websiteUrl}. The analysis evaluated four dimensions: Citability (40%), Content Quality &amp; E-E-A-T (25%), Crawler Access (20%), and Structured Data (15%).</p>
+          <p style="margin:8px 0 0;font-size:12px;color:${COLORS.MUTED};line-height:1.6"><strong>Analysis includes:</strong> AI crawler access mapping, schema markup detection, citability scoring, content quality assessment, and llms.txt compliance.</p>
           <p style="margin:8px 0 0;font-size:12px;color:${COLORS.MUTED};line-height:1.6"><strong>Standards referenced:</strong> Google Search Quality Rater Guidelines, Schema.org specification, llms.txt emerging standard, Ahrefs brand mention correlation research (Dec 2025)</p>
         </td></tr>
 
