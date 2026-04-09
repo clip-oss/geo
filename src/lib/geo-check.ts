@@ -21,23 +21,26 @@ export interface GeoCheckResult {
 
 export interface CompositeGeoScore {
   total: number; // 0-100
-  citability: number; // 0-100, weight 40%
-  contentQuality: number; // 0-100, weight 25%
-  crawlerAccess: number; // 0-100, weight 20%
-  schema: number; // 0-100, weight 15%
+  aiVisibility: number; // 0-100, weight 25%
+  citability: number; // 0-100, weight 30%
+  contentQuality: number; // 0-100, weight 20%
+  crawlerAccess: number; // 0-100, weight 15%
+  schema: number; // 0-100, weight 10%
 }
 
 export function calculateCompositeScore(components: {
+  aiVisibility: number;
   citability: number;
   contentQuality: number;
   crawlerAccess: number;
   schema: number;
 }): CompositeGeoScore {
   const total = Math.round(
-    components.citability * 0.40 +
-    components.contentQuality * 0.25 +
-    components.crawlerAccess * 0.20 +
-    components.schema * 0.15
+    components.aiVisibility * 0.25 +
+    components.citability * 0.30 +
+    components.contentQuality * 0.20 +
+    components.crawlerAccess * 0.15 +
+    components.schema * 0.10
   );
 
   return {

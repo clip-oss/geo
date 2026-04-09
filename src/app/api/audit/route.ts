@@ -1,10 +1,62 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { createAuditLead, updateAuditLead } from "@/lib/supabase";
-import { calculateCompositeScore } from "@/lib/geo-check";
+import { runGeoCheck, calculateCompositeScore } from "@/lib/geo-check";
 import { generateReportEmail } from "@/lib/email-generator";
 import { sendEmail } from "@/lib/gmail";
 import { analyzeSite } from "@/lib/site-analyzer";
+
+// Try to auto-resolve a website URL from the business name
+async function tryResolveUrl(businessName: string): Promise<string | null> {
+  // Normalize: "McDonald's" → "mcdonalds", "Burger King" → "burgerking"
+  const slug = businessName
+    .toLowerCase()
+    .replace(/['']/g, "")
+    .replace(/[^a-z0-9]/g, "")
+    .trim();
+
+  if (!slug || slug.length < 2) return null;
+
+  const candidates = [`https://www.${slug}.com`, `https://${slug}.com`];
+
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, {
+        method: "HEAD",
+        redirect: "follow",
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.ok || res.status === 301 || res.status === 302) {
+        console.log(`[GEO Audit] Auto-resolved URL: ${url}`);
+        return url;
+      }
+    } catch {
+      // URL doesn't resolve, try next
+    }
+  }
+
+  return null;
+}
+
+// Check if a Wikipedia article exists for the brand
+async function checkWikipedia(businessName: string): Promise<boolean> {
+  // Wikipedia article title format: capitalize words, spaces → underscores
+  const title = businessName
+    .trim()
+    .split(/\s+/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join("_");
+
+  try {
+    const res = await fetch(
+      `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`,
+      { signal: AbortSignal.timeout(5000) }
+    );
+    return res.ok; // 200 means article exists
+  } catch {
+    return false;
+  }
+}
 
 // Vercel function config - 60 seconds max on free tier
 export const maxDuration = 60;
@@ -113,7 +165,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const trimmedWebsiteUrl = websiteUrl?.trim() || null;
+    // Auto-resolve URL if not provided
+    let resolvedUrl = websiteUrl?.trim() || null;
+    if (!resolvedUrl) {
+      resolvedUrl = await tryResolveUrl(businessName.trim());
+      if (resolvedUrl) {
+        console.log(`[GEO Audit] No URL provided, auto-resolved to: ${resolvedUrl}`);
+      }
+    }
 
     // Create initial lead record
     const lead = await createAuditLead({
@@ -121,7 +180,7 @@ export async function POST(request: NextRequest) {
       business_type: businessType.trim(),
       city: city?.trim() || null,
       email: email.trim().toLowerCase(),
-      website_url: trimmedWebsiteUrl,
+      website_url: resolvedUrl,
       report_sent: false,
       in_claude: false,
       in_chatgpt: false,
@@ -129,13 +188,16 @@ export async function POST(request: NextRequest) {
       geo_score: 0,
     });
 
-    // Run site analysis (the core of the audit)
-    const siteAnalysis = trimmedWebsiteUrl
-      ? await analyzeSite(trimmedWebsiteUrl)
-      : null;
+    // Run AI visibility check, site analysis, and Wikipedia check in parallel
+    const [geoResult, siteAnalysis, hasWikipedia] = await Promise.all([
+      runGeoCheck(businessName.trim(), businessType.trim(), city?.trim() || undefined),
+      resolvedUrl ? analyzeSite(resolvedUrl) : Promise.resolve(null),
+      checkWikipedia(businessName.trim()),
+    ]);
 
-    // Calculate composite score from site analysis data only
+    // Calculate composite score with all dimensions
     const compositeScore = calculateCompositeScore({
+      aiVisibility: geoResult.aiVisibilityScore,
       citability: siteAnalysis?.citabilityScore ?? 0,
       contentQuality: siteAnalysis?.contentQualityScore ?? 0,
       crawlerAccess: siteAnalysis?.crawlerScore ?? 0,
@@ -144,6 +206,9 @@ export async function POST(request: NextRequest) {
 
     // Update lead with results
     await updateAuditLead(lead.id, {
+      in_claude: geoResult.inClaude,
+      in_chatgpt: geoResult.inChatGPT,
+      competitors: geoResult.competitors,
       geo_score: compositeScore.total,
       citability_score: siteAnalysis?.citabilityScore ?? null,
       crawler_score: siteAnalysis?.crawlerScore ?? null,
@@ -164,8 +229,12 @@ export async function POST(request: NextRequest) {
         businessName: businessName.trim(),
         businessType: businessType.trim(),
         city: city?.trim() || null,
-        websiteUrl: trimmedWebsiteUrl,
+        websiteUrl: resolvedUrl,
         compositeScore,
+        inClaude: geoResult.inClaude,
+        inChatGPT: geoResult.inChatGPT,
+        competitors: geoResult.competitors,
+        hasWikipedia,
         siteAnalysis,
       });
 
