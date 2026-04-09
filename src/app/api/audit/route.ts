@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { createAuditLead, updateAuditLead } from "@/lib/supabase";
-import { runGeoCheck, calculateCompositeScore } from "@/lib/geo-check";
+import { calculateCompositeScore } from "@/lib/geo-check";
 import { generateReportEmail } from "@/lib/email-generator";
 import { sendEmail } from "@/lib/gmail";
 import { analyzeSite } from "@/lib/site-analyzer";
@@ -12,6 +12,25 @@ export const maxDuration = 60;
 // Validate email format
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+// AI platform blocklist — we can't audit AI platforms against themselves
+const AI_PLATFORM_PATTERNS = [
+  "chatgpt", "chat gpt", "openai", "open ai",
+  "claude", "anthropic",
+  "gemini", "google ai", "google bard", "bard",
+  "perplexity",
+  "copilot", "bing chat", "bing ai",
+  "microsoft ai", "meta ai",
+  "grok", "xai", "x ai",
+  "deepseek", "deep seek",
+  "mistral",
+  "cohere",
+];
+
+function isAIPlatform(name: string): boolean {
+  const lower = name.toLowerCase().trim();
+  return AI_PLATFORM_PATTERNS.some((pattern) => lower.includes(pattern));
 }
 
 // Get client IP from request
@@ -86,9 +105,17 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Block AI platform audits
+    if (isAIPlatform(businessName)) {
+      return NextResponse.json(
+        { error: "We can't audit AI platforms against themselves. Please enter a business or brand name." },
+        { status: 400 }
+      );
+    }
+
     const trimmedWebsiteUrl = websiteUrl?.trim() || null;
 
-    // Create initial lead record (with placeholder values)
+    // Create initial lead record
     const lead = await createAuditLead({
       business_name: businessName.trim(),
       business_type: businessType.trim(),
@@ -102,29 +129,22 @@ export async function POST(request: NextRequest) {
       geo_score: 0,
     });
 
-    // Run GEO check AND site analysis in parallel
-    const hasWebsite = !!trimmedWebsiteUrl;
-    const [geoResult, siteAnalysis] = await Promise.all([
-      runGeoCheck(businessName, businessType, city?.trim() || undefined),
-      hasWebsite ? analyzeSite(trimmedWebsiteUrl!) : Promise.resolve(null),
-    ]);
+    // Run site analysis (the core of the audit)
+    const siteAnalysis = trimmedWebsiteUrl
+      ? await analyzeSite(trimmedWebsiteUrl)
+      : null;
 
-    // Calculate composite score
+    // Calculate composite score from site analysis data only
     const compositeScore = calculateCompositeScore({
-      aiVisibility: geoResult.aiVisibilityScore,
       citability: siteAnalysis?.citabilityScore ?? 0,
-      brandAuthority: geoResult.aiVisibilityScore > 0 ? 40 : 15, // Basic brand signal from AI presence
-      contentQuality: siteAnalysis?.contentQualityScore ?? 50,
-      crawlerAccess: siteAnalysis?.crawlerScore ?? (hasWebsite ? 50 : 80),
+      contentQuality: siteAnalysis?.contentQualityScore ?? 0,
+      crawlerAccess: siteAnalysis?.crawlerScore ?? 0,
       schema: siteAnalysis?.schemaScore ?? 0,
     });
 
     // Update lead with results
     await updateAuditLead(lead.id, {
-      in_claude: geoResult.inClaude,
-      in_chatgpt: geoResult.inChatGPT,
-      competitors: geoResult.competitors,
-      geo_score: geoResult.aiVisibilityScore,
+      geo_score: compositeScore.total,
       citability_score: siteAnalysis?.citabilityScore ?? null,
       crawler_score: siteAnalysis?.crawlerScore ?? null,
       schema_score: siteAnalysis?.schemaScore ?? null,
@@ -146,9 +166,6 @@ export async function POST(request: NextRequest) {
         city: city?.trim() || null,
         websiteUrl: trimmedWebsiteUrl,
         compositeScore,
-        inClaude: geoResult.inClaude,
-        inChatGPT: geoResult.inChatGPT,
-        competitors: geoResult.competitors,
         siteAnalysis,
       });
 
@@ -184,8 +201,6 @@ export async function POST(request: NextRequest) {
           : "Audit completed but email could not be sent. Please try again.",
         leadId: lead.id,
         geoScore: compositeScore.total,
-        inClaude: geoResult.inClaude,
-        inChatGPT: geoResult.inChatGPT,
       },
       {
         status: 200,
